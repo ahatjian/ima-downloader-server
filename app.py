@@ -25,7 +25,15 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///ima_pro.db')
+# 优先使用 PostgreSQL（LeapCell/Render 等云平台提供 DATABASE_URL）
+_db_url = os.environ.get('DATABASE_URL', '')
+if _db_url:
+    # LeapCell/Render 的 PostgreSQL URL 可能以 postgres:// 开头，SQLAlchemy 需要 postgresql://
+    if _db_url.startswith('postgres://'):
+        _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///ima_pro.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', secrets.token_hex(32))
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)

@@ -5,3 +5,4 @@ flask-jwt-extended==4.6.0
 python-dotenv==1.0.0
 tencentcloud-sdk-python-sms==3.0.1050
 gunicorn==21.2.0
+psycopg2-binary==2.9.9
