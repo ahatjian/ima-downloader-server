@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ima-downloader-pro
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: TENCENT_SMS_SECRET_ID
+        sync: false
+      - key: TENCENT_SMS_SECRET_KEY
+        sync: false
+      - key: TENCENT_SMS_SDK_APP_ID
+        sync: false
+      - key: TENCENT_SMS_SIGN_NAME
+        sync: false
+      - key: TENCENT_SMS_TEMPLATE_ID
+        sync: false
