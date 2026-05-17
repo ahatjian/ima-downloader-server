@@ -108,10 +108,10 @@
 <div class="login-overlay" id="loginOverlay">
   <div class="login-box">
     <h2>🔐 管理员登录</h2>
-    <input type="email" id="adminEmail" placeholder="管理员邮箱" />
-    <input type="text" id="adminCode" placeholder="验证码（开发模式: 888888）" />
+    <input type="email" id="adminEmail" placeholder="管理员邮箱" value="2051645018@qq.com" />
+    <input type="password" id="adminPassword" placeholder="管理员密码" value="" />
     <button class="btn btn-primary" id="adminLoginBtn">登录</button>
-    <p class="hint">开发模式下验证码为 888888</p>
+    <p class="hint">管理员使用固定密码登录</p>
   </div>
 </div>
 
@@ -179,19 +179,13 @@ let authToken = '';
 // 登录
 document.getElementById('adminLoginBtn').addEventListener('click', async () => {
   const email = document.getElementById('adminEmail').value.trim();
-  const code = document.getElementById('adminCode').value.trim();
-  if (!email || !code) { alert('请输入邮箱和验证码'); return; }
+  const password = document.getElementById('adminPassword').value.trim();
+  if (!email || !password) { alert('请输入邮箱和密码'); return; }
 
   try {
-    // 先发送验证码（开发模式下不需要真正发送）
-    await fetch(`${API}/auth/send-code`, {
+    const resp = await fetch(`${API}/auth/admin-login`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ email })
-    });
-
-    const resp = await fetch(`${API}/auth/login`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ email, code })
+      body: JSON.stringify({ email, password })
     });
     const data = await resp.json();
 
@@ -203,7 +197,7 @@ document.getElementById('adminLoginBtn').addEventListener('click', async () => {
       loadDashboard();
       loadUsers();
     } else {
-      alert('登录失败或非管理员账号');
+      alert(data.error || '登录失败或非管理员账号');
     }
   } catch (e) {
     alert('登录失败: ' + e.message);
