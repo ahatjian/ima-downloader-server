@@ -145,8 +145,9 @@ def send_sms(phone, code):
     sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '')
     template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
 
-    # 没有配置腾讯云密钥 → 开发模式（验证码打印到控制台 + 通用验证码 888888）
-    if not secret_id or not secret_key:
+    # 5个变量全部有有效值才算正式模式，否则 → 开发模式（验证码打印到控制台 + 通用验证码 888888）
+    sms_configured = all([secret_id, secret_key, sdk_app_id, sign_name, template_id])
+    if not sms_configured:
         print(f"[SMS-DEV] 验证码 → {phone}: {code}")
         print(f"[SMS-DEV] 开发模式下，任意手机号可用验证码 888888 登录")
         return True
@@ -252,8 +253,14 @@ def login():
         VerifyCode.expires_at > datetime.utcnow()
     ).order_by(VerifyCode.id.desc()).first()
 
-    # 开发模式：通用验证码 888888（仅当未配置腾讯云密钥时生效）
-    dev_mode = not os.environ.get('TENCENT_SMS_SECRET_ID', '')
+    # 开发模式：通用验证码 888888（5个SMS环境变量未全部配置时生效）
+    dev_mode = not all([
+        os.environ.get('TENCENT_SMS_SECRET_ID', ''),
+        os.environ.get('TENCENT_SMS_SECRET_KEY', ''),
+        os.environ.get('TENCENT_SMS_SDK_APP_ID', ''),
+        os.environ.get('TENCENT_SMS_SIGN_NAME', ''),
+        os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+    ])
     if not verify and dev_mode and code == '888888':
         pass  # 允许通过（verify 为 None，跳过 used 标记）
     elif not verify:
