@@ -304,6 +304,34 @@ def login():
     })
 
 
+@app.route('/api/v1/auth/admin-login', methods=['POST'])
+def admin_login():
+    """管理员固定密码登录"""
+    email = request.json.get('email', '').strip().lower()
+    password = request.json.get('password', '').strip()
+
+    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '000000')
+
+    if not email or not password:
+        return jsonify({'error': '请输入邮箱和密码'}), 400
+
+    if password != ADMIN_PASSWORD:
+        return jsonify({'error': '密码错误'}), 401
+
+    user = User.query.filter_by(email=email).first()
+    if not user or user.role != 'admin':
+        return jsonify({'error': '非管理员账号'}), 403
+
+    user.last_login = datetime.utcnow()
+    db.session.commit()
+
+    token = create_access_token(identity=str(user.id))
+    return jsonify({
+        'token': token,
+        'user': user.to_dict()
+    })
+
+
 @app.route('/api/v1/quotas', methods=['GET'])
 @jwt_required()
 def get_quotas():
