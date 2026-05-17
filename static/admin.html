@@ -97,6 +97,7 @@
     }
     .login-box input:focus { border-color: #a855f7; }
     .login-box .btn { width: 100%; padding: 12px; font-size: 14px; }
+    .login-box .hint { font-size: 11px; color: #888; text-align: center; margin-top: 8px; }
 
     .hidden { display: none !important; }
   </style>
@@ -107,9 +108,10 @@
 <div class="login-overlay" id="loginOverlay">
   <div class="login-box">
     <h2>🔐 管理员登录</h2>
-    <input type="text" id="adminPhone" placeholder="管理员手机号" />
-    <input type="text" id="adminCode" placeholder="验证码" />
+    <input type="email" id="adminEmail" placeholder="管理员邮箱" />
+    <input type="text" id="adminCode" placeholder="验证码（开发模式: 888888）" />
     <button class="btn btn-primary" id="adminLoginBtn">登录</button>
+    <p class="hint">开发模式下验证码为 888888</p>
   </div>
 </div>
 
@@ -149,11 +151,13 @@
   <div id="page-users" class="hidden">
     <h2 style="margin-bottom:20px;">👥 用户管理</h2>
     <div class="card">
+      <h3>用户列表</h3>
+      <p style="font-size:12px;color:#888;margin-bottom:12px;">💡 新用户默认配额为 0，请手动分配下载配额。用户购买后，在配额列输入数量点保存即可。</p>
       <table>
         <thead>
           <tr>
             <th>ID</th>
-            <th>手机号</th>
+            <th>邮箱</th>
             <th>配额</th>
             <th>已用</th>
             <th>剩余</th>
@@ -174,20 +178,20 @@ let authToken = '';
 
 // 登录
 document.getElementById('adminLoginBtn').addEventListener('click', async () => {
-  const phone = document.getElementById('adminPhone').value.trim();
+  const email = document.getElementById('adminEmail').value.trim();
   const code = document.getElementById('adminCode').value.trim();
-  if (!phone || !code) { alert('请输入手机号和验证码'); return; }
+  if (!email || !code) { alert('请输入邮箱和验证码'); return; }
 
   try {
-    // 先发送验证码
+    // 先发送验证码（开发模式下不需要真正发送）
     await fetch(`${API}/auth/send-code`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ phone })
+      body: JSON.stringify({ email })
     });
 
     const resp = await fetch(`${API}/auth/login`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ phone, code })
+      body: JSON.stringify({ email, code })
     });
     const data = await resp.json();
 
@@ -236,7 +240,7 @@ async function loadUsers() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${u.id}</td>
-      <td>${u.phone}</td>
+      <td>${u.email}</td>
       <td><input type="number" value="${u.quota_total}" id="qt-${u.id}" style="width:70px" /></td>
       <td>${u.quota_used}</td>
       <td style="color:#a855f7;font-weight:600">${u.quota_remaining}</td>
