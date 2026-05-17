@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 IMA 下载助手 Pro - 服务端
-功能：用户认证、配额管理、付费验证、管理后台
+功能：用户认证（邮箱+验证码）、配额管理、管理后台
 """
 
 import os
-import time
-import random
-import hashlib
+import re
+import smtplib
 import secrets
+import random
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -49,9 +50,9 @@ jwt = JWTManager(app)
 class User(db.Model):
     """用户表"""
     id = db.Column(db.Integer, primary_key=True)
-    phone = db.Column(db.String(20), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
     name = db.Column(db.String(100), default='')
-    quota_total = db.Column(db.Integer, default=100)  # 总配额
+    quota_total = db.Column(db.Integer, default=0)     # 总配额（新用户默认0，管理员手动分配）
     quota_used = db.Column(db.Integer, default=0)      # 已使用
     role = db.Column(db.String(20), default='user')     # user / admin
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -65,7 +66,7 @@ class User(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
-            'phone': self.phone,
+            'email': self.email,
             'name': self.name,
             'quota_total': self.quota_total,
             'quota_used': self.quota_used,
@@ -79,7 +80,7 @@ class User(db.Model):
 class VerifyCode(db.Model):
     """验证码表"""
     id = db.Column(db.Integer, primary_key=True)
-    phone = db.Column(db.String(20), nullable=False)
+    email = db.Column(db.String(120), nullable=False)
     code = db.Column(db.String(6), nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
     used = db.Column(db.Boolean, default=False)
@@ -121,7 +122,7 @@ def admin_required(f):
     @wraps(f)
     @jwt_required()
     def decorated(*args, **kwargs):
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         user = User.query.get(user_id)
         if not user or user.role != 'admin':
             return jsonify({'error': '需要管理员权限'}), 403
@@ -129,63 +130,74 @@ def admin_required(f):
     return decorated
 
 
-def send_sms(phone, code):
-    """
-    发送短信验证码 - 腾讯云 SMS
-    配置环境变量：
-    - TENCENT_SMS_SECRET_ID: 腾讯云 SecretId
-    - TENCENT_SMS_SECRET_KEY: 腾讯云 SecretKey
-    - TENCENT_SMS_SDK_APP_ID: 短信应用 AppId
-    - TENCENT_SMS_SIGN_NAME: 短信签名名称
-    - TENCENT_SMS_TEMPLATE_ID: 短信模板 ID
-    """
-    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '')
-    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
-    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '')
-    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '')
-    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+def is_smtp_configured():
+    """检查 SMTP 是否已配置"""
+    return all([
+        os.environ.get('SMTP_HOST', '').strip(),
+        os.environ.get('SMTP_PORT', '').strip(),
+        os.environ.get('SMTP_USER', '').strip(),
+        os.environ.get('SMTP_PASSWORD', '').strip(),
+    ])
 
-    # 没有配置腾讯云密钥 → 开发模式（验证码打印到控制台 + 通用验证码 888888）
-    if not secret_id or not secret_key:
-        print(f"[SMS-DEV] 验证码 → {phone}: {code}")
-        print(f"[SMS-DEV] 开发模式下，任意手机号可用验证码 888888 登录")
+
+def send_email_code(to_email, code):
+    """
+    发送验证码邮件
+    环境变量：
+    - SMTP_HOST: SMTP 服务器地址（如 smtp.qq.com）
+    - SMTP_PORT: SMTP 端口（如 465 或 587）
+    - SMTP_USER: 发件邮箱地址
+    - SMTP_PASSWORD: 邮箱授权码（非登录密码）
+    - SMTP_FROM_NAME: 发件人名称（可选，默认 IMA下载助手）
+    """
+    if not is_smtp_configured():
+        # 开发模式：验证码打印到控制台 + 通用验证码 888888
+        print(f"[EMAIL-DEV] 验证码 -> {to_email}: {code}")
+        print(f"[EMAIL-DEV] 开发模式下，任意邮箱可用验证码 888888 登录")
         return True
 
-    # 正式模式：调用腾讯云 SMS API
+    # 正式模式：通过 SMTP 发送邮件
     try:
-        from tencentcloud.common import credential
-        from tencentcloud.common.profile.client_profile import ClientProfile
-        from tencentcloud.common.profile.http_profile import HttpProfile
-        from tencentcloud.sms.v20210111 import sms_client, models as sms_models
+        smtp_host = os.environ.get('SMTP_HOST', '').strip()
+        smtp_port = int(os.environ.get('SMTP_PORT', '465').strip())
+        smtp_user = os.environ.get('SMTP_USER', '').strip()
+        smtp_password = os.environ.get('SMTP_PASSWORD', '').strip()
+        from_name = os.environ.get('SMTP_FROM_NAME', 'IMA下载助手').strip()
 
-        cred = credential.Credential(secret_id, secret_key)
-        httpProfile = HttpProfile()
-        httpProfile.reqMethod = "POST"
-        httpProfile.reqTimeout = 10
-        clientProfile = ClientProfile()
-        clientProfile.httpProfile = httpProfile
+        subject = f'{from_name} - 登录验证码'
+        body = f"""
+您好！
 
-        client = sms_client.SmsClient(cred, "ap-guangzhou", clientProfile)
+您的登录验证码是：{code}
 
-        req = sms_models.SendSmsRequest()
-        req.SmsSdkAppId = sdk_app_id
-        req.SignName = sign_name
-        req.TemplateId = template_id
-        req.TemplateParamSet = [code, "5"]  # 验证码, 有效期分钟数
-        req.PhoneNumberSet = [f"+86{phone}"]
+验证码5分钟内有效，请勿泄露给他人。
 
-        resp = client.SendSms(req)
-        status = resp.SendStatusSet[0]
+如非本人操作，请忽略此邮件。
 
-        if status.Code == "Ok":
-            print(f"[SMS] ✓ 发送成功 → {phone}")
-            return True
+—— {from_name}
+"""
+        msg = MIMEText(body, 'plain', 'utf-8')
+        msg['Subject'] = subject
+        msg['From'] = f'{from_name} <{smtp_user}>'
+        msg['To'] = to_email
+
+        if smtp_port == 465:
+            # SSL 模式
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
         else:
-            print(f"[SMS] ✗ 发送失败 → {phone}: {status.Code} - {status.Message}")
-            return False
+            # TLS 模式
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+            server.starttls()
+
+        server.login(smtp_user, smtp_password)
+        server.sendmail(smtp_user, [to_email], msg.as_string())
+        server.quit()
+
+        print(f"[EMAIL] 发送成功 -> {to_email}")
+        return True
 
     except Exception as e:
-        print(f"[SMS] ✗ 发送异常 → {phone}: {e}")
+        print(f"[EMAIL] 发送失败 -> {to_email}: {e}")
         return False
 
 
@@ -196,75 +208,87 @@ def send_sms(phone, code):
 @app.route('/api/v1/auth/session-key', methods=['POST'])
 def get_session_key():
     """返回客户端加密用的会话密钥（每次不同，比硬编码安全）"""
-    key = secrets.token_bytes(32)
-    # 存储到服务端会话中用于解密（简化版：直接返回）
     import base64
+    key = secrets.token_bytes(32)
     return jsonify({'key': base64.b64encode(key).decode()})
 
 
 @app.route('/api/v1/auth/send-code', methods=['POST'])
 def send_code():
-    """发送验证码"""
-    phone = request.json.get('phone', '').strip()
-    if not phone or len(phone) != 11:
-        return jsonify({'error': '请输入正确的手机号'}), 400
+    """发送验证码到邮箱"""
+    email = request.json.get('email', '').strip().lower()
+    if not email or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        return jsonify({'error': '请输入正确的邮箱地址'}), 400
 
-    # 限制频率：同一手机号60秒内只能发一次
+    # 限制频率：同一邮箱60秒内只能发一次
     recent = VerifyCode.query.filter(
-        VerifyCode.phone == phone,
+        VerifyCode.email == email,
         VerifyCode.expires_at > datetime.utcnow()
     ).order_by(VerifyCode.id.desc()).first()
 
-    if recent and (datetime.utcnow() - recent.expires_at.replace(
-        tzinfo=None) if recent.expires_at.tzinfo else recent.expires_at
-    ).total_seconds() > -240:  # 5分钟有效期，240秒前发的说明在60秒冷却期内
-        pass  # 允许重发
+    if recent and (datetime.utcnow() - (recent.expires_at.replace(tzinfo=None) if recent.expires_at.tzinfo else recent.expires_at)).total_seconds() > -240:
+        return jsonify({'error': '发送太频繁，请稍后再试'}), 429
 
     code = str(random.randint(100000, 999999))
     verify = VerifyCode(
-        phone=phone,
+        email=email,
         code=code,
         expires_at=datetime.utcnow() + timedelta(minutes=5)
     )
     db.session.add(verify)
     db.session.commit()
 
-    # 发送短信
-    send_sms(phone, code)
+    # 发送邮件
+    send_email_code(email, code)
 
     return jsonify({'message': '验证码已发送'})
 
 
+@app.route('/api/v1/auth/dev-status', methods=['GET'])
+def dev_status():
+    """调试端点：返回 SMTP 配置状态"""
+    smtp_ok = is_smtp_configured()
+    return jsonify({
+        'dev_mode': not smtp_ok,
+        'smtp_configured': smtp_ok,
+        'smtp_host': os.environ.get('SMTP_HOST', ''),
+        'smtp_user': os.environ.get('SMTP_USER', ''),
+    })
+
+
 @app.route('/api/v1/auth/login', methods=['POST'])
 def login():
-    """验证码登录"""
-    phone = request.json.get('phone', '').strip()
+    """邮箱+验证码登录"""
+    email = request.json.get('email', '').strip().lower()
     code = request.json.get('code', '').strip()
 
-    if not phone or not code:
-        return jsonify({'error': '请输入手机号和验证码'}), 400
+    if not email or not code:
+        return jsonify({'error': '请输入邮箱和验证码'}), 400
 
     # 验证码校验
     verify = VerifyCode.query.filter(
-        VerifyCode.phone == phone,
+        VerifyCode.email == email,
         VerifyCode.code == code,
         VerifyCode.used == False,
         VerifyCode.expires_at > datetime.utcnow()
     ).order_by(VerifyCode.id.desc()).first()
 
-    # 开发模式：通用验证码 888888（仅当未配置腾讯云密钥时生效）
-    dev_mode = not os.environ.get('TENCENT_SMS_SECRET_ID', '')
+    # 开发模式：通用验证码 888888（SMTP 未配置时生效）
+    dev_mode = not is_smtp_configured()
     if not verify and dev_mode and code == '888888':
         pass  # 允许通过
     elif not verify:
         return jsonify({'error': '验证码错误或已过期'}), 401
 
-    verify.used = True
+    if verify:
+        verify.used = True
 
     # 查找或创建用户
-    user = User.query.filter_by(phone=phone).first()
+    user = User.query.filter_by(email=email).first()
     if not user:
-        user = User(phone=phone, name=f'用户{phone[-4:]}', quota_total=100)
+        # 新用户：默认配额为0，需要管理员分配
+        email_prefix = email.split('@')[0]
+        user = User(email=email, name=f'用户{email_prefix[:8]}', quota_total=0)
         db.session.add(user)
     elif not user.is_active:
         return jsonify({'error': '账号已被禁用，请联系管理员'}), 403
@@ -273,7 +297,7 @@ def login():
     db.session.commit()
 
     # 生成 JWT
-    token = create_access_token(identity=user.id)
+    token = create_access_token(identity=str(user.id))
     return jsonify({
         'token': token,
         'user': user.to_dict()
@@ -284,7 +308,7 @@ def login():
 @jwt_required()
 def get_quotas():
     """获取配额"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': '用户不存在'}), 404
@@ -300,14 +324,14 @@ def get_quotas():
 @jwt_required()
 def consume_quota():
     """消耗配额（下载时调用）"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
 
     if not user:
         return jsonify({'error': '用户不存在'}), 404
 
     if user.quota_remaining <= 0:
-        return jsonify({'error': '配额不足或已过期，请充值后继续使用', 'message': '配额不足'}), 403
+        return jsonify({'error': '配额不足，请联系管理员充值', 'message': '配额不足'}), 403
 
     count = request.json.get('count', 1)
     user.quota_used += count
@@ -324,7 +348,7 @@ def consume_quota():
 @jwt_required()
 def get_user():
     """获取用户信息"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': '用户不存在'}), 404
@@ -423,7 +447,7 @@ def init_admin():
     admin = User.query.filter_by(role='admin').first()
     if not admin:
         admin = User(
-            phone='admin',
+            email='admin@ima-pro.local',
             name='管理员',
             role='admin',
             quota_total=999999,
@@ -431,8 +455,8 @@ def init_admin():
         )
         db.session.add(admin)
         db.session.commit()
-        print(f"[INIT] 管理员账号已创建: admin")
-        print(f"[INIT] 请使用管理后台登录并修改密码")
+        print(f"[INIT] 管理员账号已创建: admin@ima-pro.local")
+        print(f"[INIT] 开发模式下可用验证码 888888 登录")
 
 
 with app.app_context():
