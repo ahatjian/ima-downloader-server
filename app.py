@@ -203,12 +203,23 @@ def send_email_code(to_email, code):
         print(f"[EMAIL-DEV] 验证码 -> {to_email}: {code}")
         return True
 
+    smtp_host = os.environ.get('SMTP_HOST', '').strip()
+    smtp_port = int(os.environ.get('SMTP_PORT', '465').strip())
+    smtp_user = os.environ.get('SMTP_USER', '').strip()
+    smtp_password = os.environ.get('SMTP_PASSWORD', '').strip()
+    from_name = os.environ.get('SMTP_FROM_NAME', 'IMA下载助手').strip()
+
+    print(f"[EMAIL] 尝试发送: host={smtp_host}, port={smtp_port}, user={smtp_user}, to={to_email}")
+
     try:
-        smtp_host = os.environ.get('SMTP_HOST', '').strip()
-        smtp_port = int(os.environ.get('SMTP_PORT', '465').strip())
-        smtp_user = os.environ.get('SMTP_USER', '').strip()
-        smtp_password = os.environ.get('SMTP_PASSWORD', '').strip()
-        from_name = os.environ.get('SMTP_FROM_NAME', 'IMA下载助手').strip()
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+            server.starttls()
+
+        server.login(smtp_user, smtp_password)
+        print(f"[EMAIL] SMTP登录成功")
 
         subject = f'{from_name} - 登录验证码'
         body = f"""
@@ -227,21 +238,16 @@ def send_email_code(to_email, code):
         msg['From'] = f'{from_name} <{smtp_user}>'
         msg['To'] = to_email
 
-        if smtp_port == 465:
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
-        else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
-            server.starttls()
-
-        server.login(smtp_user, smtp_password)
         server.sendmail(smtp_user, [to_email], msg.as_string())
+        print(f"[EMAIL] 邮件已投递 -> {to_email}")
         server.quit()
 
-        print(f"[EMAIL] 发送成功 -> {to_email}")
         return True
 
     except Exception as e:
-        print(f"[EMAIL] 发送失败 -> {to_email}: {e}")
+        print(f"[EMAIL] 发送失败 -> {to_email}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -295,7 +301,10 @@ def send_code():
     db.session.add(verify)
     db.session.commit()
 
-    send_email_code(email, code)
+    email_sent = send_email_code(email, code)
+
+    if not email_sent:
+        return jsonify({'error': '验证码发送失败，请稍后再试或联系管理员'}), 500
 
     return jsonify({'message': '验证码已发送'})
 
