@@ -121,7 +121,7 @@ def admin_required(f):
     @wraps(f)
     @jwt_required()
     def decorated(*args, **kwargs):
-        user_id = get_jwt_identity()
+        user_id = int(get_jwt_identity())
         user = User.query.get(user_id)
         if not user or user.role != 'admin':
             return jsonify({'error': '需要管理员权限'}), 403
@@ -304,7 +304,7 @@ def login():
     db.session.commit()
 
     # 生成 JWT
-    token = create_access_token(identity=user.id)
+    token = create_access_token(identity=str(user.id))
     return jsonify({
         'token': token,
         'user': user.to_dict()
@@ -315,7 +315,7 @@ def login():
 @jwt_required()
 def get_quotas():
     """获取配额"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': '用户不存在'}), 404
@@ -331,7 +331,7 @@ def get_quotas():
 @jwt_required()
 def consume_quota():
     """消耗配额（下载时调用）"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
 
     if not user:
@@ -355,7 +355,7 @@ def consume_quota():
 @jwt_required()
 def get_user():
     """获取用户信息"""
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
         return jsonify({'error': '用户不存在'}), 404
