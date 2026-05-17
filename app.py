@@ -460,7 +460,22 @@ def init_admin():
 
 
 with app.app_context():
-    db.create_all()
+    # 检查是否存在旧的 phone 列（从手机号方案迁移到邮箱方案）
+    try:
+        result = db.session.execute(db.text("SELECT column_name FROM information_schema.columns WHERE table_name='user' AND column_name='phone'"))
+        old_phone_col = result.fetchone()
+        if old_phone_col:
+            print('[MIGRATE] 检测到旧表结构(phone列)，删除旧表重建...')
+            db.drop_all()
+    except Exception as e:
+        print('[MIGRATE] 检查表结构异常: ' + str(e))
+        # 如果表不存在也会报错，直接继续 create_all
+    try:
+        db.create_all()
+    except Exception as e:
+        print('[INIT] db.create_all() failed: ' + str(e) + ', dropping and recreating...')
+        db.drop_all()
+        db.create_all()
     init_admin()
 
 
