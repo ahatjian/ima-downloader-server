@@ -236,6 +236,29 @@ def send_code():
     return jsonify({'message': '验证码已发送'})
 
 
+@app.route('/api/v1/auth/dev-status', methods=['GET'])
+def dev_status():
+    """调试端点：返回SMS配置状态"""
+    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '')
+    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
+    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '')
+    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '')
+    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+    sms_configured = all([secret_id, secret_key, sdk_app_id, sign_name, template_id])
+    return jsonify({
+        'dev_mode': not sms_configured,
+        'sms_configured': sms_configured,
+        'has_secret_id': bool(secret_id),
+        'has_secret_key': bool(secret_key),
+        'has_sdk_app_id': bool(sdk_app_id),
+        'has_sign_name': bool(sign_name),
+        'has_template_id': bool(template_id),
+        'secret_id_preview': (secret_id[:6] + '...') if secret_id else '',
+        'sign_name_value': sign_name,
+        'template_id_value': template_id,
+    })
+
+
 @app.route('/api/v1/auth/login', methods=['POST'])
 def login():
     """验证码登录"""
