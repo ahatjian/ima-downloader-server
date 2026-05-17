@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 IMA 下载助手 Pro - 服务端 (安全加固版)
-功能：用户认证（邮箱+验证码）、配额管理、管理后台
+功能：用户认证（邮箱+验证码 / 手机号+短信）、配额管理、管理后台
 """
 
 import os
@@ -107,6 +107,7 @@ class User(db.Model):
     """用户表"""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
+    phone = db.Column(db.String(20), unique=True, nullable=True)
     name = db.Column(db.String(100), default='')
     quota_total = db.Column(db.Integer, default=0)
     quota_used = db.Column(db.Integer, default=0)
@@ -123,6 +124,7 @@ class User(db.Model):
         return {
             'id': self.id,
             'email': self.email,
+            'phone': self.phone,
             'name': self.name,
             'quota_total': self.quota_total,
             'quota_used': self.quota_used,
@@ -136,7 +138,8 @@ class User(db.Model):
 class VerifyCode(db.Model):
     """验证码表"""
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), nullable=True)  # 邮箱验证码（可空，与phone二选一）
+    phone = db.Column(db.String(20), nullable=True)   # 手机验证码（可空，与email二选一）
     code = db.Column(db.String(6), nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
     used = db.Column(db.Boolean, default=False)
@@ -208,8 +211,10 @@ def send_email_code(to_email, code):
     smtp_user = os.environ.get('SMTP_USER', '').strip()
     smtp_password = os.environ.get('SMTP_PASSWORD', '').strip()
     from_name = os.environ.get('SMTP_FROM_NAME', 'IMA下载助手').strip()
+    # SendGrid 等第三方 SMTP 的认证用户名（如 "apikey"）≠ 发件人邮箱
+    from_email = os.environ.get('SMTP_FROM_EMAIL', smtp_user).strip()
 
-    print(f"[EMAIL] 尝试发送: host={smtp_host}, port={smtp_port}, user={smtp_user}, to={to_email}")
+    print(f"[EMAIL] 尝试发送: host={smtp_host}, port={smtp_port}, user={smtp_user}, from={from_email}, to={to_email}")
 
     try:
         if smtp_port == 465:
@@ -235,10 +240,10 @@ def send_email_code(to_email, code):
 """
         msg = MIMEText(body, 'plain', 'utf-8')
         msg['Subject'] = subject
-        msg['From'] = f'{from_name} <{smtp_user}>'
+        msg['From'] = f'{from_name} <{from_email}>'
         msg['To'] = to_email
 
-        server.sendmail(smtp_user, [to_email], msg.as_string())
+        server.sendmail(from_email, [to_email], msg.as_string())
         print(f"[EMAIL] 邮件已投递 -> {to_email}")
         server.quit()
 
@@ -246,6 +251,72 @@ def send_email_code(to_email, code):
 
     except Exception as e:
         print(f"[EMAIL] 发送失败 -> {to_email}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# ============================================================
+# 腾讯云短信
+# ============================================================
+
+def is_sms_configured():
+    """检查腾讯云短信是否已配置"""
+    return all([
+        os.environ.get('TENCENT_SMS_SECRET_ID', '').strip(),
+        os.environ.get('TENCENT_SMS_SECRET_KEY', '').strip(),
+        os.environ.get('TENCENT_SMS_SDK_APP_ID', '').strip(),
+        os.environ.get('TENCENT_SMS_SIGN_NAME', '').strip(),
+        os.environ.get('TENCENT_SMS_TEMPLATE_ID', '').strip(),
+    ])
+
+
+def send_phone_sms(phone, code):
+    """
+    发送短信验证码
+    返回: True 发送成功 / None 开发模式(未配置SMS, 888888通用码) / False 发送失败
+    """
+    if not is_sms_configured():
+        print(f"[SMS-DEV] 短信验证码 -> {phone}: {code}")
+        return None  # 开发模式
+
+    try:
+        from tencentcloud.common import credential
+        from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
+        from tencentcloud.sms.v20210111 import sms_client, models
+
+        secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '').strip()
+        secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '').strip()
+        sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '').strip()
+        sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '').strip()
+        template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '').strip()
+
+        cred = credential.Credential(secret_id, secret_key)
+        client = sms_client.SmsClient(cred, "ap-guangzhou")
+
+        req = models.SendSmsRequest()
+        req.SmsSdkAppId = sdk_app_id
+        req.SignName = sign_name
+        req.TemplateId = template_id
+        req.TemplateParamSet = [code, "5"]  # 验证码, 有效期(分钟)
+        req.PhoneNumberSet = ["+86" + phone]
+
+        resp = client.SendSms(req)
+        print(f"[SMS] 发送成功 -> {phone}, 请求ID: {resp.RequestId}")
+
+        # 检查发送结果
+        for status in resp.SendStatusSet:
+            if status.Code != "Ok":
+                print(f"[SMS] 发送失败 -> {phone}: {status.Code} - {status.Message}")
+                return False
+
+        return True
+
+    except TencentCloudSDKException as e:
+        print(f"[SMS] SDK异常 -> {phone}: {e}")
+        return False
+    except Exception as e:
+        print(f"[SMS] 发送失败 -> {phone}: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -309,13 +380,61 @@ def send_code():
     return jsonify({'message': '验证码已发送'})
 
 
+@app.route('/api/v1/auth/send-sms', methods=['POST'])
+def send_sms_code():
+    """发送短信验证码到手机"""
+    phone = request.json.get('phone', '').strip()
+    if not phone or not re.match(r'^1[3-9]\d{9}$', phone):
+        return jsonify({'error': '请输入正确的手机号'}), 400
+
+    # 安全：IP频率限制
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    limited, wait = rate_limiter.is_limited(f'sms:{client_ip}', 3, 60)
+    if limited:
+        return jsonify({'error': f'请求太频繁，请{wait}秒后再试'}), 429
+
+    # 安全：手机号频率限制（同一手机号60秒内只能发一次）
+    limited2, wait2 = rate_limiter.is_limited(f'sms:{phone}', 1, 60)
+    if limited2:
+        return jsonify({'error': f'发送太频繁，请{wait2}秒后再试'}), 429
+
+    # 安全：检查该手机号未使用验证码数量
+    unused_count = VerifyCode.query.filter(
+        VerifyCode.phone == phone,
+        VerifyCode.used == False,
+        VerifyCode.expires_at > datetime.utcnow()
+    ).count()
+    if unused_count >= 3:
+        return jsonify({'error': '验证码发送过多，请使用已收到的验证码'}), 429
+
+    code = str(secrets.randbelow(900000) + 100000)
+
+    verify = VerifyCode(
+        phone=phone,
+        code=code,
+        expires_at=datetime.utcnow() + timedelta(minutes=5)
+    )
+    db.session.add(verify)
+    db.session.commit()
+
+    sms_result = send_phone_sms(phone, code)
+
+    if sms_result is False:
+        return jsonify({'error': '短信发送失败，请稍后再试或联系管理员'}), 500
+
+    # dev_mode (sms_result is None) 或成功 (sms_result is True) 都返回成功
+    return jsonify({'message': '验证码已发送'})
+
+
 @app.route('/api/v1/auth/dev-status', methods=['GET'])
 def dev_status():
     """调试端点：返回配置状态（安全：不暴露敏感信息）"""
     smtp_ok = is_smtp_configured()
+    sms_ok = is_sms_configured()
     return jsonify({
-        'dev_mode': not smtp_ok,
+        'dev_mode': not smtp_ok and not sms_ok,
         'smtp_configured': smtp_ok,
+        'sms_configured': sms_ok,
     })
 
 
@@ -381,6 +500,73 @@ def login():
     db.session.commit()
 
     login_tracker.record_attempt(email, True)
+
+    token = create_access_token(identity=str(user.id))
+    return jsonify({
+        'token': token,
+        'user': user.to_dict()
+    })
+
+
+@app.route('/api/v1/auth/phone-login', methods=['POST'])
+def phone_login():
+    """手机号+验证码登录"""
+    phone = request.json.get('phone', '').strip()
+    code = request.json.get('code', '').strip()
+
+    if not phone or not code:
+        return jsonify({'error': '请输入手机号和验证码'}), 400
+    if not re.match(r'^1[3-9]\d{9}$', phone):
+        return jsonify({'error': '请输入正确的手机号'}), 400
+
+    # 安全：检查登录锁定
+    locked, lock_wait = login_tracker.is_locked(f'phone:{phone}')
+    if locked:
+        return jsonify({'error': f'登录尝试过多，请{lock_wait}秒后再试'}), 429
+
+    # 安全：IP频率限制
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    limited, wait = rate_limiter.is_limited(f'login:{client_ip}', 10, 60)
+    if limited:
+        return jsonify({'error': f'请求太频繁，请{wait}秒后再试'}), 429
+
+    # 验证码校验
+    verify = VerifyCode.query.filter(
+        VerifyCode.phone == phone,
+        VerifyCode.code == code,
+        VerifyCode.used == False,
+        VerifyCode.expires_at > datetime.utcnow()
+    ).order_by(VerifyCode.id.desc()).first()
+
+    # 开发模式：通用验证码 888888（SMS 未配置时生效）
+    dev_mode = not is_sms_configured()
+    if not verify and dev_mode and code == '888888':
+        pass
+    elif not verify:
+        login_tracker.record_attempt(f'phone:{phone}', False)
+        return jsonify({'error': '验证码错误或已过期'}), 401
+
+    # 安全：验证码最多尝试3次
+    if verify and verify.attempts >= 3:
+        verify.used = True
+        db.session.commit()
+        return jsonify({'error': '验证码已失效，请重新获取'}), 401
+
+    if verify:
+        verify.used = True
+
+    # 查找或创建用户（按手机号）
+    user = User.query.filter_by(phone=phone).first()
+    if not user:
+        user = User(phone=phone, name=f'用户{phone[-4:]}', quota_total=0)
+        db.session.add(user)
+    elif not user.is_active:
+        return jsonify({'error': '账号已被禁用，请联系管理员'}), 403
+
+    user.last_login = datetime.utcnow()
+    db.session.commit()
+
+    login_tracker.record_attempt(f'phone:{phone}', True)
 
     token = create_access_token(identity=str(user.id))
     return jsonify({
@@ -621,36 +807,36 @@ def admin_page():
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
 .sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:#1a1a2e;padding:20px 0;border-right:1px solid #2d2d44}
-.sidebar h2{font-size:16px;color:#a855f7;padding:0 20px;margin-bottom:24px}
+.sidebar h2{font-size:16px;color:#f97316;padding:0 20px;margin-bottom:24px}
 .sidebar a{display:block;padding:12px 20px;color:#999;text-decoration:none;font-size:14px;transition:all 0.2s}
-.sidebar a:hover,.sidebar a.active{color:white;background:#2d2d44;border-left:3px solid #a855f7}
+.sidebar a:hover,.sidebar a.active{color:white;background:#2d2d44;border-left:3px solid #f97316}
 .main{margin-left:220px;padding:24px}
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
 .stat-card{background:#1a1a2e;border-radius:12px;padding:20px;text-align:center}
-.stat-card .num{font-size:32px;font-weight:700;color:#a855f7}
+.stat-card .num{font-size:32px;font-weight:700;color:#f97316}
 .stat-card .label{font-size:12px;color:#888;margin-top:4px}
 .card{background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px}
-.card h3{font-size:16px;color:#a855f7;margin-bottom:16px}
+.card h3{font-size:16px;color:#f97316;margin-bottom:16px}
 table{width:100%;border-collapse:collapse}
 th,td{padding:10px 12px;text-align:left;font-size:13px;border-bottom:1px solid #2d2d44}
 th{color:#888;font-weight:600}
 tr:hover td{background:#1e1e32}
 .btn{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;transition:all 0.2s}
-.btn-primary{background:#a855f7;color:white}
+.btn-primary{background:#f97316;color:white}
 .btn-danger{background:#dc3545;color:white}
 .btn-success{background:#28a745;color:white}
 .btn-sm{padding:4px 10px;font-size:11px}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
 .badge-active{background:rgba(40,167,69,0.2);color:#28a745}
 .badge-disabled{background:rgba(220,53,69,0.2);color:#dc3545}
-.badge-admin{background:rgba(168,85,247,0.2);color:#a855f7}
+.badge-admin{background:rgba(249,115,22,0.2);color:#f97316}
 input[type="number"]{background:#2d2d44;border:1px solid #3d3d5c;border-radius:6px;padding:6px 10px;color:#e0e0e0;font-size:13px;width:80px;outline:none}
-input[type="number"]:focus{border-color:#a855f7}
+input[type="number"]:focus{border-color:#f97316}
 .login-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,15,26,0.95);z-index:9999;display:flex;align-items:center;justify-content:center}
 .login-box{background:#1a1a2e;border-radius:16px;padding:32px;width:360px}
-.login-box h2{color:#a855f7;margin-bottom:20px;text-align:center}
+.login-box h2{color:#f97316;margin-bottom:20px;text-align:center}
 .login-box input{width:100%;background:#2d2d44;border:1px solid #3d3d5c;border-radius:8px;padding:12px;color:#e0e0e0;font-size:14px;margin-bottom:12px;outline:none}
-.login-box input:focus{border-color:#a855f7}
+.login-box input:focus{border-color:#f97316}
 .login-box .btn{width:100%;padding:12px;font-size:14px}
 .login-box .hint{font-size:11px;color:#888;text-align:center;margin-top:8px}
 .hidden{display:none!important}
@@ -686,7 +872,7 @@ input[type="number"]:focus{border-color:#a855f7}
     <div class="card">
       <h3>用户列表</h3>
       <p style="font-size:12px;color:#888;margin-bottom:12px;">&#128161; 新用户默认配额为0，请手动分配下载配额。</p>
-      <table><thead><tr><th>ID</th><th>邮箱</th><th>配额</th><th>已用</th><th>剩余</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="userTableBody"></tbody></table>
+      <table><thead><tr><th>ID</th><th>邮箱</th><th>手机号</th><th>配额</th><th>已用</th><th>剩余</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="userTableBody"></tbody></table>
     </div>
   </div>
 </div>
@@ -725,7 +911,7 @@ async function loadUsers(){
   const tbody=document.getElementById("userTableBody");tbody.innerHTML="";
   (data.users||[]).forEach(u=>{
     const tr=document.createElement("tr");
-    tr.innerHTML="<td>"+u.id+"</td><td>"+u.email+"</td><td><input type='number' value='"+u.quota_total+"' id='qt-"+u.id+"' style='width:70px' /></td><td>"+u.quota_used+"</td><td style='color:#a855f7;font-weight:600'>"+u.quota_remaining+"</td><td><span class='badge "+(u.is_active?"badge-active":"badge-disabled")+"'>"+(u.is_active?"活跃":"禁用")+"</span>"+(u.role==="admin"?"<span class='badge badge-admin'>管理员</span>":"")+"</td><td style='font-size:11px;color:#666'>"+((u.created_at||"").split("T")[0]||"-")+"</td><td><button class='btn btn-primary btn-sm' onclick='updateQuota("+u.id+")'>💾</button> <button class='btn "+(u.is_active?"btn-danger":"btn-success")+" btn-sm' onclick='toggleUser("+u.id+")'>"+(u.is_active?"禁用":"启用")+"</button></td>";
+    tr.innerHTML="<td>"+u.id+"</td><td>"+u.email+"</td><td>"+(u.phone||"-")+"</td><td><input type='number' value='"+u.quota_total+"' id='qt-"+u.id+"' style='width:70px' /></td><td>"+u.quota_used+"</td><td style='color:#f97316;font-weight:600'>"+u.quota_remaining+"</td><td><span class='badge "+(u.is_active?"badge-active":"badge-disabled")+"'>"+(u.is_active?"活跃":"禁用")+"</span>"+(u.role==="admin"?"<span class='badge badge-admin'>管理员</span>":"")+"</td><td style='font-size:11px;color:#666'>"+((u.created_at||"").split("T")[0]||"-")+"</td><td><button class='btn btn-primary btn-sm' onclick='updateQuota("+u.id+")'>💾</button> <button class='btn "+(u.is_active?"btn-danger":"btn-success")+" btn-sm' onclick='toggleUser("+u.id+")'>"+(u.is_active?"禁用":"启用")+"</button></td>";
     tbody.appendChild(tr);
   });
 }
@@ -748,20 +934,43 @@ def init_admin():
         print('[INIT] No admin found, creating default admin...')
 
 with app.app_context():
-    try:
-        result = db.session.execute(db.text("SELECT column_name FROM information_schema.columns WHERE table_name='user' AND column_name='phone'"))
-        old_phone_col = result.fetchone()
-        if old_phone_col:
-            print('[MIGRATE] 检测到旧表结构(phone列)，删除旧表重建...')
-            db.drop_all()
-    except Exception as e:
-        print('[MIGRATE] 检查表结构异常: ' + str(e))
+    # 安全迁移：使用 db.create_all() 创建表（仅在不存在时），不进行破坏性删除
     try:
         db.create_all()
+        print('[INIT] 数据库表创建/验证完成')
     except Exception as e:
-        print('[INIT] db.create_all() failed: ' + str(e) + ', dropping and recreating...')
-        db.drop_all()
-        db.create_all()
+        print('[INIT] db.create_all() failed: ' + str(e))
+        raise
+
+    # 安全添加 phone 列到 user 表（如果不存在）
+    try:
+        _db_url = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        if 'postgresql' in _db_url:
+            db.session.execute(db.text(
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS phone VARCHAR(20)'
+            ))
+            db.session.execute(db.text(
+                'ALTER TABLE verify_code ADD COLUMN IF NOT EXISTS phone VARCHAR(20)'
+            ))
+            db.session.execute(db.text(
+                'ALTER TABLE verify_code ALTER COLUMN email DROP NOT NULL'
+            ))
+            print('[MIGRATE] PostgreSQL: phone 列已添加（或已存在）')
+        else:
+            for stmt in [
+                'ALTER TABLE "user" ADD COLUMN phone VARCHAR(20)',
+                'ALTER TABLE verify_code ADD COLUMN phone VARCHAR(20)',
+            ]:
+                try:
+                    db.session.execute(db.text(stmt))
+                    print(f'[MIGRATE] SQLite: {stmt}')
+                except Exception:
+                    print(f'[MIGRATE] SQLite: 列已存在，跳过')
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print('[MIGRATE] 迁移: ' + str(e))
+
     init_admin()
 
 
