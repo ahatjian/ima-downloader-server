@@ -462,8 +462,131 @@ def admin_stats():
 
 @app.route('/admin')
 def admin_page():
-    """管理后台 HTML 页面"""
-    return send_from_directory('static', 'admin.html')
+    """管理后台 HTML 页面（内联，避免缓存问题）"""
+    return """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IMA 下载助手 Pro - 管理后台</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:#1a1a2e;padding:20px 0;border-right:1px solid #2d2d44}
+.sidebar h2{font-size:16px;color:#a855f7;padding:0 20px;margin-bottom:24px}
+.sidebar a{display:block;padding:12px 20px;color:#999;text-decoration:none;font-size:14px;transition:all 0.2s}
+.sidebar a:hover,.sidebar a.active{color:white;background:#2d2d44;border-left:3px solid #a855f7}
+.main{margin-left:220px;padding:24px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:#1a1a2e;border-radius:12px;padding:20px;text-align:center}
+.stat-card .num{font-size:32px;font-weight:700;color:#a855f7}
+.stat-card .label{font-size:12px;color:#888;margin-top:4px}
+.card{background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px}
+.card h3{font-size:16px;color:#a855f7;margin-bottom:16px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;font-size:13px;border-bottom:1px solid #2d2d44}
+th{color:#888;font-weight:600}
+tr:hover td{background:#1e1e32}
+.btn{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;transition:all 0.2s}
+.btn-primary{background:#a855f7;color:white}
+.btn-danger{background:#dc3545;color:white}
+.btn-success{background:#28a745;color:white}
+.btn-sm{padding:4px 10px;font-size:11px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.badge-active{background:rgba(40,167,69,0.2);color:#28a745}
+.badge-disabled{background:rgba(220,53,69,0.2);color:#dc3545}
+.badge-admin{background:rgba(168,85,247,0.2);color:#a855f7}
+input[type="number"]{background:#2d2d44;border:1px solid #3d3d5c;border-radius:6px;padding:6px 10px;color:#e0e0e0;font-size:13px;width:80px;outline:none}
+input[type="number"]:focus{border-color:#a855f7}
+.login-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,15,26,0.95);z-index:9999;display:flex;align-items:center;justify-content:center}
+.login-box{background:#1a1a2e;border-radius:16px;padding:32px;width:360px}
+.login-box h2{color:#a855f7;margin-bottom:20px;text-align:center}
+.login-box input{width:100%;background:#2d2d44;border:1px solid #3d3d5c;border-radius:8px;padding:12px;color:#e0e0e0;font-size:14px;margin-bottom:12px;outline:none}
+.login-box input:focus{border-color:#a855f7}
+.login-box .btn{width:100%;padding:12px;font-size:14px}
+.login-box .hint{font-size:11px;color:#888;text-align:center;margin-top:8px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>&#128272; 管理员登录</h2>
+    <input type="email" id="adminEmail" placeholder="管理员邮箱" value="2051645018@qq.com" />
+    <input type="password" id="adminPassword" placeholder="管理员密码" />
+    <button class="btn btn-primary" id="adminLoginBtn">登录</button>
+    <p class="hint">管理员使用固定密码登录</p>
+  </div>
+</div>
+<div class="sidebar hidden" id="sidebar">
+  <h2>&#9889; 管理后台</h2>
+  <a href="#" class="active" onclick="showPage('dashboard')">&#128202; 仪表盘</a>
+  <a href="#" onclick="showPage('users')">&#128101; 用户管理</a>
+</div>
+<div class="main hidden" id="mainContent">
+  <div id="page-dashboard">
+    <h2 style="margin-bottom:20px;">&#128202; 仪表盘</h2>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="num" id="s-totalUsers">-</div><div class="label">总用户数</div></div>
+      <div class="stat-card"><div class="num" id="s-activeUsers">-</div><div class="label">活跃用户</div></div>
+      <div class="stat-card"><div class="num" id="s-totalDownloads">-</div><div class="label">总下载次数</div></div>
+      <div class="stat-card"><div class="num" id="s-quotaUsed">-</div><div class="label">配额已用</div></div>
+    </div>
+  </div>
+  <div id="page-users" class="hidden">
+    <h2 style="margin-bottom:20px;">&#128101; 用户管理</h2>
+    <div class="card">
+      <h3>用户列表</h3>
+      <p style="font-size:12px;color:#888;margin-bottom:12px;">&#128161; 新用户默认配额为0，请手动分配下载配额。</p>
+      <table><thead><tr><th>ID</th><th>邮箱</th><th>配额</th><th>已用</th><th>剩余</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="userTableBody"></tbody></table>
+    </div>
+  </div>
+</div>
+<script>
+const API=window.location.origin+"/api/v1";let authToken="";
+document.getElementById("adminLoginBtn").addEventListener("click",async()=>{
+  const email=document.getElementById("adminEmail").value.trim();
+  const password=document.getElementById("adminPassword").value.trim();
+  if(!email||!password){alert("请输入邮箱和密码");return}
+  try{
+    const resp=await fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+    const data=await resp.json();
+    if(data.token&&data.user&&data.user.role==="admin"){
+      authToken=data.token;
+      document.getElementById("loginOverlay").classList.add("hidden");
+      document.getElementById("sidebar").classList.remove("hidden");
+      document.getElementById("mainContent").classList.remove("hidden");
+      loadDashboard();loadUsers();
+    }else{alert(data.error||"登录失败或非管理员账号")}
+  }catch(e){alert("登录失败: "+e.message)}
+});
+function apiFetch(path,options={}){
+  return fetch(API+path,{...options,headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken,...(options.headers||{})}}).then(r=>r.json());
+}
+async function loadDashboard(){
+  const data=await apiFetch("/admin/stats");
+  if(data.total_users!==undefined){
+    document.getElementById("s-totalUsers").textContent=data.total_users;
+    document.getElementById("s-activeUsers").textContent=data.active_users;
+    document.getElementById("s-totalDownloads").textContent=data.total_downloads;
+    document.getElementById("s-quotaUsed").textContent=data.total_quota_used;
+  }
+}
+async function loadUsers(){
+  const data=await apiFetch("/admin/users?per_page=100");
+  const tbody=document.getElementById("userTableBody");tbody.innerHTML="";
+  (data.users||[]).forEach(u=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML="<td>"+u.id+"</td><td>"+u.email+"</td><td><input type='number' value='"+u.quota_total+"' id='qt-"+u.id+"' style='width:70px' /></td><td>"+u.quota_used+"</td><td style='color:#a855f7;font-weight:600'>"+u.quota_remaining+"</td><td><span class='badge "+(u.is_active?"badge-active":"badge-disabled")+"'>"+(u.is_active?"活跃":"禁用")+"</span>"+(u.role==="admin"?"<span class='badge badge-admin'>管理员</span>":"")+"</td><td style='font-size:11px;color:#666'>"+((u.created_at||"").split("T")[0]||"-")+"</td><td><button class='btn btn-primary btn-sm' onclick='updateQuota("+u.id+")'>💾</button> <button class='btn "+(u.is_active?"btn-danger":"btn-success")+" btn-sm' onclick='toggleUser("+u.id+")'>"+(u.is_active?"禁用":"启用")+"</button></td>";
+    tbody.appendChild(tr);
+  });
+}
+async function updateQuota(userId){const qt=document.getElementById("qt-"+userId).value;await apiFetch("/admin/users/"+userId+"/quota",{method:"PUT",body:JSON.stringify({quota_total:parseInt(qt)})});loadUsers()}
+async function toggleUser(userId){await apiFetch("/admin/users/"+userId+"/toggle",{method:"POST"});loadUsers()}
+function showPage(page){document.querySelectorAll("[id^='page-']").forEach(el=>el.classList.add("hidden"));document.getElementById("page-"+page).classList.remove("hidden");document.querySelectorAll(".sidebar a").forEach(a=>a.classList.remove("active"));event.target.classList.add("active")}
+</script>
+</body>
+</html>"""
 
 
 # ============================================================
