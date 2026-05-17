@@ -255,11 +255,12 @@ def login():
     # 开发模式：通用验证码 888888（仅当未配置腾讯云密钥时生效）
     dev_mode = not os.environ.get('TENCENT_SMS_SECRET_ID', '')
     if not verify and dev_mode and code == '888888':
-        pass  # 允许通过
+        pass  # 允许通过（verify 为 None，跳过 used 标记）
     elif not verify:
         return jsonify({'error': '验证码错误或已过期'}), 401
 
-    verify.used = True
+    if verify:
+        verify.used = True
 
     # 查找或创建用户
     user = User.query.filter_by(phone=phone).first()
