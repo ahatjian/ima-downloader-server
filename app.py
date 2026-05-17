@@ -139,11 +139,11 @@ def send_sms(phone, code):
     - TENCENT_SMS_SIGN_NAME: 短信签名名称
     - TENCENT_SMS_TEMPLATE_ID: 短信模板 ID
     """
-    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '')
-    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
-    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '')
-    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '')
-    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '').strip()
+    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '').strip()
+    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '').strip()
+    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '').strip()
+    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '').strip()
 
     # 5个变量全部有有效值才算正式模式，否则 → 开发模式（验证码打印到控制台 + 通用验证码 888888）
     sms_configured = all([secret_id, secret_key, sdk_app_id, sign_name, template_id])
@@ -239,11 +239,11 @@ def send_code():
 @app.route('/api/v1/auth/dev-status', methods=['GET'])
 def dev_status():
     """调试端点：返回SMS配置状态"""
-    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '')
-    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '')
-    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '')
-    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '')
-    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+    secret_id = os.environ.get('TENCENT_SMS_SECRET_ID', '').strip()
+    secret_key = os.environ.get('TENCENT_SMS_SECRET_KEY', '').strip()
+    sdk_app_id = os.environ.get('TENCENT_SMS_SDK_APP_ID', '').strip()
+    sign_name = os.environ.get('TENCENT_SMS_SIGN_NAME', '').strip()
+    template_id = os.environ.get('TENCENT_SMS_TEMPLATE_ID', '').strip()
     sms_configured = all([secret_id, secret_key, sdk_app_id, sign_name, template_id])
     return jsonify({
         'dev_mode': not sms_configured,
@@ -278,11 +278,11 @@ def login():
 
     # 开发模式：通用验证码 888888（5个SMS环境变量未全部配置时生效）
     dev_mode = not all([
-        os.environ.get('TENCENT_SMS_SECRET_ID', ''),
-        os.environ.get('TENCENT_SMS_SECRET_KEY', ''),
-        os.environ.get('TENCENT_SMS_SDK_APP_ID', ''),
-        os.environ.get('TENCENT_SMS_SIGN_NAME', ''),
-        os.environ.get('TENCENT_SMS_TEMPLATE_ID', '')
+        os.environ.get('TENCENT_SMS_SECRET_ID', '').strip(),
+        os.environ.get('TENCENT_SMS_SECRET_KEY', '').strip(),
+        os.environ.get('TENCENT_SMS_SDK_APP_ID', '').strip(),
+        os.environ.get('TENCENT_SMS_SIGN_NAME', '').strip(),
+        os.environ.get('TENCENT_SMS_TEMPLATE_ID', '').strip()
     ])
     if not verify and dev_mode and code == '888888':
         pass  # 允许通过（verify 为 None，跳过 used 标记）
