@@ -887,12 +887,13 @@ def admin_stats():
 @app.route('/admin')
 def admin_page():
     """管理后台 HTML 页面"""
-    return """<!DOCTYPE html>
+    from flask import make_response
+    resp = make_response("""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IMA 下载助手 Pro - 管理后台</title>
+<title>IMA 下载助手 Pro - 管理后台 v2</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
@@ -956,7 +957,8 @@ input[type="number"]{width:55px}
     <input type="email" id="adminEmail" placeholder="管理员邮箱" value="2051645018@qq.com" />
     <input type="password" id="adminPassword" placeholder="管理员密码" />
     <button class="btn btn-primary" id="adminLoginBtn">登录</button>
-    <p class="hint">管理员使用固定密码登录</p>
+    <p id="loginStatus" style="margin-top:10px;font-size:12px;text-align:center;min-height:18px;"></p>
+    <p class="hint">管理员使用固定密码登录 | v2</p>
   </div>
 </div>
 <div class="sidebar hidden" id="sidebar">
@@ -1010,22 +1012,29 @@ input[type="number"]{width:55px}
   </div>
 </div>
 <script>
-const API=window.location.origin+"/api/v1";let authToken="";
+var API=window.location.origin+"/api/v1";var authToken="";
+var ls=document.getElementById("loginStatus");
+function logStatus(msg,color){if(ls){ls.textContent=msg;ls.style.color=color||"#888"}}
+logStatus("✅ 页面已加载 v2, API="+API,"#16a34a");
 document.getElementById("adminLoginBtn").addEventListener("click",async()=>{
-  const email=document.getElementById("adminEmail").value.trim();
-  const password=document.getElementById("adminPassword").value.trim();
-  if(!email||!password){alert("请输入邮箱和密码");return}
+  var email=document.getElementById("adminEmail").value.trim();
+  var password=document.getElementById("adminPassword").value.trim();
+  logStatus("⏳ 验证输入...","#f59e0b");
+  if(!email||!password){logStatus("❌ 请输入邮箱和密码","#dc3545");return}
+  logStatus("⏳ 发送登录请求到: "+API+"/auth/admin-login","#3b82f6");
   try{
-    const resp=await fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
-    const data=await resp.json();
+    var resp=await fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,password:password})});
+    logStatus("⏳ 收到响应 HTTP "+resp.status,"#3b82f6");
+    var data=await resp.json();
     if(data.token&&data.user&&data.user.role==="admin"){
       authToken=data.token;
+      logStatus("✅ 登录成功！正在加载面板...","#16a34a");
       document.getElementById("loginOverlay").classList.add("hidden");
       document.getElementById("sidebar").classList.remove("hidden");
       document.getElementById("mainContent").classList.remove("hidden");
       loadDashboard();loadUsers();
-    }else{alert(data.error||"登录失败或非管理员账号")}
-  }catch(e){alert("登录失败: "+e.message)}
+    }else{logStatus("❌ "+(data.error||"登录失败或非管理员账号"),"#dc3545")}
+  }catch(e){logStatus("❌ 网络错误: "+e.message,"#dc3545")}
 });
 function apiFetch(path,options={}){
   return fetch(API+path,{...options,headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken,...(options.headers||{})}}).then(r=>r.json());
@@ -1090,10 +1099,14 @@ document.getElementById("createUserBtn").addEventListener("click",async()=>{
     else{m.textContent=data.error||"创建失败";m.className="msg msg-error";m.classList.remove("hidden")}
   }catch(e){m.textContent="创建失败: "+e.message;m.className="msg msg-error";m.classList.remove("hidden")}
 });
-function showPage(page){document.querySelectorAll("[id^='page-']").forEach(el=>el.classList.add("hidden"));document.getElementById("page-"+page).classList.remove("hidden");document.querySelectorAll(".sidebar a").forEach(a=>a.classList.remove("active"));event.target.classList.add("active")}
+function showPage(page){document.querySelectorAll("[id^='page-']").forEach(function(el){el.classList.add("hidden")});document.getElementById("page-"+page).classList.remove("hidden");document.querySelectorAll(".sidebar a").forEach(function(a){a.classList.remove("active")});event.target.classList.add("active")}
 </script>
 </body>
-</html>"""
+</html>""")
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 # ============================================================
