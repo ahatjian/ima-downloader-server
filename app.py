@@ -1105,12 +1105,26 @@ def init_admin():
     admin = User.query.filter_by(role='admin').first()
     if not admin:
         print('[INIT] No admin found, creating default admin...')
+        ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '2051645018@qq.com')
+        ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '000000')
+        admin_user = User(
+            email=ADMIN_EMAIL,
+            name='管理员',
+            password_hash=hash_password(ADMIN_PASSWORD),
+            role='admin',
+            is_active=True,
+            quota_total=999999,
+        )
+        db.session.add(admin_user)
+        db.session.commit()
+        print(f'[INIT] Default admin created: {ADMIN_EMAIL}')
 
 with app.app_context():
     # 安全迁移：使用 db.create_all() 创建表（仅在不存在时），不进行破坏性删除
     try:
         db.create_all()
         print('[INIT] 数据库表创建/验证完成')
+        init_admin()
     except Exception as e:
         print('[INIT] db.create_all() failed: ' + str(e))
         raise
