@@ -954,11 +954,13 @@ input[type="number"]{width:55px}
 <div class="login-overlay" id="loginOverlay">
   <div class="login-box">
     <h2>&#128272; 管理员登录</h2>
+    <form onsubmit="return handleLogin(event)" style="margin:0">
     <input type="email" id="adminEmail" placeholder="管理员邮箱" value="2051645018@qq.com" />
     <input type="password" id="adminPassword" placeholder="管理员密码" />
-    <button class="btn btn-primary" id="adminLoginBtn">登录</button>
+    <button type="submit" class="btn btn-primary" id="adminLoginBtn">登录</button>
+    </form>
     <p id="loginStatus" style="margin-top:10px;font-size:12px;text-align:center;min-height:18px;"></p>
-    <p class="hint">管理员使用固定密码登录 | v2</p>
+    <p class="hint">管理员使用固定密码登录 | v3</p>
   </div>
 </div>
 <div class="sidebar hidden" id="sidebar">
@@ -1015,17 +1017,20 @@ input[type="number"]{width:55px}
 var API=window.location.origin+"/api/v1";var authToken="";
 var ls=document.getElementById("loginStatus");
 function logStatus(msg,color){if(ls){ls.textContent=msg;ls.style.color=color||"#888"}}
-logStatus("✅ 页面已加载 v2, API="+API,"#16a34a");
-document.getElementById("adminLoginBtn").addEventListener("click",async()=>{
+logStatus("✅ 页面已加载 v3, API="+API,"#16a34a");
+window.handleLogin=function(e){
+  e&&e.preventDefault();
   var email=document.getElementById("adminEmail").value.trim();
   var password=document.getElementById("adminPassword").value.trim();
   logStatus("⏳ 验证输入...","#f59e0b");
-  if(!email||!password){logStatus("❌ 请输入邮箱和密码","#dc3545");return}
+  if(!email||!password){logStatus("❌ 请输入邮箱和密码","#dc3545");return false}
   logStatus("⏳ 发送登录请求到: "+API+"/auth/admin-login","#3b82f6");
-  try{
-    var resp=await fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,password:password})});
+  fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,password:password})})
+  .then(function(resp){
     logStatus("⏳ 收到响应 HTTP "+resp.status,"#3b82f6");
-    var data=await resp.json();
+    return resp.json();
+  })
+  .then(function(data){
     if(data.token&&data.user&&data.user.role==="admin"){
       authToken=data.token;
       logStatus("✅ 登录成功！正在加载面板...","#16a34a");
@@ -1034,8 +1039,10 @@ document.getElementById("adminLoginBtn").addEventListener("click",async()=>{
       document.getElementById("mainContent").classList.remove("hidden");
       loadDashboard();loadUsers();
     }else{logStatus("❌ "+(data.error||"登录失败或非管理员账号"),"#dc3545")}
-  }catch(e){logStatus("❌ 网络错误: "+e.message,"#dc3545")}
-});
+  })
+  .catch(function(e){logStatus("❌ 网络错误: "+e.message,"#dc3545")});
+  return false;
+};
 function apiFetch(path,options={}){
   return fetch(API+path,{...options,headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken,...(options.headers||{})}}).then(r=>r.json());
 }
