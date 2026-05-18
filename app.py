@@ -893,7 +893,7 @@ def admin_page():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IMA 下载助手 Pro - 管理后台 v2</title>
+<title>IMA 下载助手 Pro - 管理后台 v4</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
@@ -957,10 +957,10 @@ input[type="number"]{width:55px}
     <form onsubmit="return handleLogin(event)" style="margin:0">
     <input type="email" id="adminEmail" placeholder="管理员邮箱" value="2051645018@qq.com" />
     <input type="password" id="adminPassword" placeholder="管理员密码" />
-    <button type="submit" class="btn btn-primary" id="adminLoginBtn">登录</button>
+    <button type="submit" class="btn btn-primary" id="adminLoginBtn" onclick="if(window.handleLogin){return handleLogin(event)}else{var ls=document.getElementById('loginStatus');if(ls){ls.textContent='❌ JS未加载，请刷新页面';ls.style.color='#dc3545'};return false}">登录</button>
     </form>
     <p id="loginStatus" style="margin-top:10px;font-size:12px;text-align:center;min-height:18px;"></p>
-    <p class="hint">管理员使用固定密码登录 | v3</p>
+    <p class="hint">管理员使用固定密码登录 | v4 (外部JS)</p>
   </div>
 </div>
 <div class="sidebar hidden" id="sidebar">
@@ -1013,103 +1013,255 @@ input[type="number"]{width:55px}
     </div>
   </div>
 </div>
+<script type="text/javascript">
+// 启动诊断：在外部JS加载前先显示状态
+(function(){
+  var ls=document.getElementById("loginStatus");
+  if(ls){ls.textContent="⏳ 页面已加载，等待 /admin.js ...";ls.style.color="#f59e0b"}
+  console.log("[Admin] HTML loaded v4, waiting for external JS...");
+})();
+</script>
+<script type="text/javascript" src="/admin.js"></script>
+</body>
+</html>""")
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
+
+@app.route('/admin-test')
+def admin_test_page():
+    """最小诊断页面：验证 JS 是否能执行"""
+    from flask import make_response
+    resp = make_response("""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin JS Test</title>
+<style>
+body{font-family:monospace;background:#0f0f1a;color:#e0e0e0;padding:40px;text-align:center}
+h1{color:#7c3aed}
+#status{font-size:20px;margin-top:20px;padding:20px;border-radius:8px}
+.ok{color:#16a34a;background:rgba(22,163,74,0.1)}
+.fail{color:#dc3545;background:rgba(220,53,69,0.1)}
+</style>
+</head>
+<body>
+<h1>🧪 JS 执行诊断</h1>
+<p id="status">⏳ 等待 JS 执行...</p>
 <script>
-var API=window.location.origin+"/api/v1";var authToken="";
-var ls=document.getElementById("loginStatus");
-function logStatus(msg,color){if(ls){ls.textContent=msg;ls.style.color=color||"#888"}}
-logStatus("✅ 页面已加载 v3, API="+API,"#16a34a");
-window.handleLogin=function(e){
-  e&&e.preventDefault();
-  var email=document.getElementById("adminEmail").value.trim();
-  var password=document.getElementById("adminPassword").value.trim();
-  logStatus("⏳ 验证输入...","#f59e0b");
-  if(!email||!password){logStatus("❌ 请输入邮箱和密码","#dc3545");return false}
-  logStatus("⏳ 发送登录请求到: "+API+"/auth/admin-login","#3b82f6");
-  fetch(API+"/auth/admin-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,password:password})})
-  .then(function(resp){
-    logStatus("⏳ 收到响应 HTTP "+resp.status,"#3b82f6");
-    return resp.json();
-  })
-  .then(function(data){
-    if(data.token&&data.user&&data.user.role==="admin"){
-      authToken=data.token;
-      logStatus("✅ 登录成功！正在加载面板...","#16a34a");
-      document.getElementById("loginOverlay").classList.add("hidden");
-      document.getElementById("sidebar").classList.remove("hidden");
-      document.getElementById("mainContent").classList.remove("hidden");
-      loadDashboard();loadUsers();
-    }else{logStatus("❌ "+(data.error||"登录失败或非管理员账号"),"#dc3545")}
-  })
-  .catch(function(e){logStatus("❌ 网络错误: "+e.message,"#dc3545")});
-  return false;
-};
-function apiFetch(path,options={}){
-  return fetch(API+path,{...options,headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken,...(options.headers||{})}}).then(r=>r.json());
-}
-async function loadDashboard(){
-  const data=await apiFetch("/admin/stats");
-  if(data.total_users!==undefined){
-    document.getElementById("s-totalUsers").textContent=data.total_users;
-    document.getElementById("s-activeUsers").textContent=data.active_users;
-    document.getElementById("s-totalDownloads").textContent=data.total_downloads;
-    document.getElementById("s-quotaUsed").textContent=data.total_quota_used;
-  }
-}
-function subTypeBadge(ut,exp){
-  if(!ut)return'<span style="color:#666">-</span>';
-  var n={day:"日卡",month:"月卡",year:"年卡"};
-  var cls=exp?"badge-expired":"badge-"+ut;
-  var lb=exp?(n[ut]||ut)+" ⚠":(n[ut]||ut);
-  return'<span class="badge '+cls+'">'+lb+'</span>';
-}
-function fmtExpiry(ea,exp){
-  if(!ea)return'<span style="color:#666">-</span>';
-  var d=ea.split("T")[0];
-  return exp?'<span class="expired-text">'+d+' (已到期)</span>':d;
-}
-async function loadUsers(){
-  const data=await apiFetch("/admin/users?per_page=100");
-  const tbody=document.getElementById("userTableBody");tbody.innerHTML="";
-  (data.users||[]).forEach(u=>{
-    var subHtml=subTypeBadge(u.subscription_type,u.is_subscription_expired);
-    var expHtml=fmtExpiry(u.subscription_expires_at,u.is_subscription_expired);
-    var activeBadge='<span class="badge '+(u.is_active?"badge-active":"badge-disabled")+'">'+(u.is_active?"活跃":"禁用")+'</span>';
-    var adminBadge=u.role==="admin"?'<span class="badge badge-admin">管理员</span>':'';
-    var createdDate=(u.created_at||"").split("T")[0]||"-";
-    var tr=document.createElement("tr");
-    tr.innerHTML='<td style="color:#666;font-size:10px">'+u.id+'</td><td>'+u.email+'</td><td><input type="number" value="'+u.quota_total+'" id="qt-'+u.id+'" /></td><td>'+u.quota_used+'</td><td style="color:#7c3aed;font-weight:600">'+u.quota_remaining+'</td><td>'+subHtml+'</td><td style="font-size:10px">'+expHtml+'</td><td>'+activeBadge+adminBadge+'</td><td style="font-size:10px;color:#666">'+createdDate+'</td><td style="white-space:nowrap"><button class="btn btn-primary btn-sm" onclick="updateQuota('+u.id+')">💾</button> <button class="btn btn-warning btn-sm" onclick="showSubModal('+u.id+')">📅</button> <button class="btn '+(u.is_active?"btn-danger":"btn-success")+' btn-sm" onclick="toggleUser('+u.id+')">'+(u.is_active?"禁用":"启用")+'</button></td>';
-    tbody.appendChild(tr);
-  });
-}
-async function updateQuota(userId){const qt=document.getElementById("qt-"+userId).value;await apiFetch("/admin/users/"+userId+"/quota",{method:"PUT",body:JSON.stringify({quota_total:parseInt(qt)})});loadUsers()}
-async function showSubModal(userId){
-  var st=prompt("输入订阅类型:\n- day (日卡/1天)\n- month (月卡/30天)\n- year (年卡/365天)\n- 留空 = 取消订阅","");
-  if(st===null)return;
-  await apiFetch("/admin/users/"+userId+"/subscription",{method:"PUT",body:JSON.stringify({subscription_type:st.trim()})});
-  loadUsers();
-}
-async function toggleUser(userId){await apiFetch("/admin/users/"+userId+"/toggle",{method:"POST"});loadUsers()}
-document.getElementById("createUserBtn").addEventListener("click",async()=>{
-  var email=document.getElementById("newEmail").value.trim();
-  var pass=document.getElementById("newPassword").value.trim();
-  var name=document.getElementById("newName").value.trim();
-  var quota=parseInt(document.getElementById("newQuota").value)||100;
-  var sub=document.getElementById("newSubType").value;
-  var m=document.getElementById("createMsg");
-  if(!email||email.indexOf("@")<0){m.textContent="请输入正确的邮箱";m.className="msg msg-error";m.classList.remove("hidden");return}
-  if(!pass||pass.length<6){m.textContent="密码至少6位";m.className="msg msg-error";m.classList.remove("hidden");return}
-  try{
-    var body={email:email,password:pass,quota_total:quota,name:name};
-    if(sub)body.subscription_type=sub;
-    var data=await apiFetch("/admin/users",{method:"POST",body:JSON.stringify(body)});
-    if(data.id){m.textContent="✅ 用户创建成功！邮箱: "+data.email;m.className="msg msg-success";m.classList.remove("hidden");document.getElementById("newEmail").value="";document.getElementById("newPassword").value="";document.getElementById("newName").value="";loadUsers();setTimeout(function(){m.classList.add("hidden")},5000)}
-    else{m.textContent=data.error||"创建失败";m.className="msg msg-error";m.classList.remove("hidden")}
-  }catch(e){m.textContent="创建失败: "+e.message;m.className="msg msg-error";m.classList.remove("hidden")}
-});
-function showPage(page){document.querySelectorAll("[id^='page-']").forEach(function(el){el.classList.add("hidden")});document.getElementById("page-"+page).classList.remove("hidden");document.querySelectorAll(".sidebar a").forEach(function(a){a.classList.remove("active")});event.target.classList.add("active")}
+(function(){
+  var s=document.getElementById("status");
+  s.textContent="✅ JS 执行成功! "+new Date().toISOString();
+  s.className="ok";
+  console.log("JS executed successfully at "+new Date().toISOString());
+})();
 </script>
 </body>
 </html>""")
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
+
+@app.route('/admin.js')
+def admin_js():
+    """管理员后台 JavaScript（外部文件，避免内联脚本问题）"""
+    from flask import make_response
+    js_code = """// IMA 下载助手 Pro - 管理后台 JS v4
+(function(){
+  'use strict';
+  var API = window.location.origin + '/api/v1';
+  var authToken = '';
+
+  // 显示登录状态
+  function logStatus(msg, color) {
+    var ls = document.getElementById('loginStatus');
+    if (ls) {
+      ls.textContent = msg;
+      ls.style.color = color || '#888';
+    }
+    console.log('[Admin]', msg);
+  }
+
+  logStatus('✅ 页面已加载 v4, API=' + API, '#16a34a');
+
+  // 登录函数
+  window.handleLogin = function(e) {
+    if (e) e.preventDefault();
+    var email = document.getElementById('adminEmail').value.trim();
+    var password = document.getElementById('adminPassword').value.trim();
+    logStatus('⏳ 验证输入...', '#f59e0b');
+    if (!email || !password) {
+      logStatus('❌ 请输入邮箱和密码', '#dc3545');
+      return false;
+    }
+    logStatus('⏳ 发送登录请求到: ' + API + '/auth/admin-login', '#3b82f6');
+    fetch(API + '/auth/admin-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    })
+    .then(function(resp) {
+      logStatus('⏳ 收到响应 HTTP ' + resp.status, '#3b82f6');
+      return resp.json();
+    })
+    .then(function(data) {
+      if (data.token && data.user && data.user.role === 'admin') {
+        authToken = data.token;
+        logStatus('✅ 登录成功！正在加载面板...', '#16a34a');
+        document.getElementById('loginOverlay').classList.add('hidden');
+        document.getElementById('sidebar').classList.remove('hidden');
+        document.getElementById('mainContent').classList.remove('hidden');
+        loadDashboard();
+        loadUsers();
+      } else {
+        logStatus('❌ ' + (data.error || '登录失败或非管理员账号'), '#dc3545');
+      }
+    })
+    .catch(function(e) {
+      logStatus('❌ 网络错误: ' + e.message, '#dc3545');
+    });
+    return false;
+  };
+
+  // API 请求封装
+  function apiFetch(path, options) {
+    if (!options) options = {};
+    options.headers = Object.assign({
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + authToken
+    }, options.headers || {});
+    return fetch(API + path, options).then(function(r) { return r.json(); });
+  }
+
+  // 加载仪表盘
+  window.loadDashboard = function() {
+    apiFetch('/admin/stats').then(function(data) {
+      if (data.total_users !== undefined) {
+        document.getElementById('s-totalUsers').textContent = data.total_users;
+        document.getElementById('s-activeUsers').textContent = data.active_users;
+        document.getElementById('s-totalDownloads').textContent = data.total_downloads;
+        document.getElementById('s-quotaUsed').textContent = data.total_quota_used;
+      }
+    });
+  };
+
+  // 订阅标签
+  function subTypeBadge(ut, exp) {
+    if (!ut) return '<span style="color:#666">-</span>';
+    var n = { day: '日卡', month: '月卡', year: '年卡' };
+    var cls = exp ? 'badge-expired' : 'badge-' + ut;
+    var lb = exp ? (n[ut] || ut) + ' ⚠' : (n[ut] || ut);
+    return '<span class="badge ' + cls + '">' + lb + '</span>';
+  }
+
+  // 到期时间格式化
+  function fmtExpiry(ea, exp) {
+    if (!ea) return '<span style="color:#666">-</span>';
+    var d = ea.split('T')[0];
+    return exp ? '<span class="expired-text">' + d + ' (已到期)</span>' : d;
+  }
+
+  // 加载用户列表
+  window.loadUsers = function() {
+    apiFetch('/admin/users?per_page=100').then(function(data) {
+      var tbody = document.getElementById('userTableBody');
+      tbody.innerHTML = '';
+      (data.users || []).forEach(function(u) {
+        var subHtml = subTypeBadge(u.subscription_type, u.is_subscription_expired);
+        var expHtml = fmtExpiry(u.subscription_expires_at, u.is_subscription_expired);
+        var activeBadge = '<span class="badge ' + (u.is_active ? 'badge-active' : 'badge-disabled') + '">' + (u.is_active ? '活跃' : '禁用') + '</span>';
+        var adminBadge = u.role === 'admin' ? '<span class="badge badge-admin">管理员</span>' : '';
+        var createdDate = (u.created_at || '').split('T')[0] || '-';
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td style="color:#666;font-size:10px">' + u.id + '</td><td>' + u.email + '</td><td><input type="number" value="' + u.quota_total + '" id="qt-' + u.id + '" /></td><td>' + u.quota_used + '</td><td style="color:#7c3aed;font-weight:600">' + u.quota_remaining + '</td><td>' + subHtml + '</td><td style="font-size:10px">' + expHtml + '</td><td>' + activeBadge + adminBadge + '</td><td style="font-size:10px;color:#666">' + createdDate + '</td><td style="white-space:nowrap"><button class="btn btn-primary btn-sm" onclick="updateQuota(' + u.id + ')">💾</button> <button class="btn btn-warning btn-sm" onclick="showSubModal(' + u.id + ')">📅</button> <button class="btn ' + (u.is_active ? 'btn-danger' : 'btn-success') + ' btn-sm" onclick="toggleUser(' + u.id + ')">' + (u.is_active ? '禁用' : '启用') + '</button></td>';
+        tbody.appendChild(tr);
+      });
+    });
+  };
+
+  // 更新配额
+  window.updateQuota = function(userId) {
+    var qt = document.getElementById('qt-' + userId).value;
+    apiFetch('/admin/users/' + userId + '/quota', { method: 'PUT', body: JSON.stringify({ quota_total: parseInt(qt) }) }).then(function() { loadUsers(); });
+  };
+
+  // 修改订阅
+  window.showSubModal = function(userId) {
+    var st = prompt('输入订阅类型:\\n- day (日卡/1天)\\n- month (月卡/30天)\\n- year (年卡/365天)\\n- 留空 = 取消订阅', '');
+    if (st === null) return;
+    apiFetch('/admin/users/' + userId + '/subscription', { method: 'PUT', body: JSON.stringify({ subscription_type: st.trim() }) }).then(function() { loadUsers(); });
+  };
+
+  // 启用/禁用用户
+  window.toggleUser = function(userId) {
+    apiFetch('/admin/users/' + userId + '/toggle', { method: 'POST' }).then(function() { loadUsers(); });
+  };
+
+  // 创建用户按钮
+  var createBtn = document.getElementById('createUserBtn');
+  if (createBtn) {
+    createBtn.addEventListener('click', function() {
+      var email = document.getElementById('newEmail').value.trim();
+      var pass = document.getElementById('newPassword').value.trim();
+      var name = document.getElementById('newName').value.trim();
+      var quota = parseInt(document.getElementById('newQuota').value) || 100;
+      var sub = document.getElementById('newSubType').value;
+      var m = document.getElementById('createMsg');
+      if (!email || email.indexOf('@') < 0) {
+        m.textContent = '请输入正确的邮箱';
+        m.className = 'msg msg-error';
+        m.classList.remove('hidden');
+        return;
+      }
+      if (!pass || pass.length < 6) {
+        m.textContent = '密码至少6位';
+        m.className = 'msg msg-error';
+        m.classList.remove('hidden');
+        return;
+      }
+      var body = { email: email, password: pass, quota_total: quota, name: name };
+      if (sub) body.subscription_type = sub;
+      apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(body) }).then(function(data) {
+        if (data.id) {
+          m.textContent = '✅ 用户创建成功！邮箱: ' + data.email;
+          m.className = 'msg msg-success';
+          m.classList.remove('hidden');
+          document.getElementById('newEmail').value = '';
+          document.getElementById('newPassword').value = '';
+          document.getElementById('newName').value = '';
+          loadUsers();
+          setTimeout(function() { m.classList.add('hidden'); }, 5000);
+        } else {
+          m.textContent = data.error || '创建失败';
+          m.className = 'msg msg-error';
+          m.classList.remove('hidden');
+        }
+      }).catch(function(e) {
+        m.textContent = '创建失败: ' + e.message;
+        m.className = 'msg msg-error';
+        m.classList.remove('hidden');
+      });
+    });
+  }
+
+  // 页面切换
+  window.showPage = function(page) {
+    document.querySelectorAll("[id^='page-']").forEach(function(el) { el.classList.add('hidden'); });
+    document.getElementById('page-' + page).classList.remove('hidden');
+    document.querySelectorAll('.sidebar a').forEach(function(a) { a.classList.remove('active'); });
+    if (event && event.target) event.target.classList.add('active');
+  };
+
+  console.log('[Admin] v4 JS loaded successfully');
+})();
+"""
+    resp = make_response(js_code)
+    resp.headers['Content-Type'] = 'application/javascript; charset=utf-8'
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
