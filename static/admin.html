@@ -52,8 +52,8 @@
     .card h3 { font-size: 16px; color: #a855f7; margin-bottom: 16px; }
 
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid #2d2d44; }
-    th { color: #888; font-weight: 600; }
+    th, td { padding: 8px 10px; text-align: left; font-size: 12px; border-bottom: 1px solid #2d2d44; }
+    th { color: #888; font-weight: 600; white-space: nowrap; }
     tr:hover td { background: #1e1e32; }
 
     .btn {
@@ -61,8 +61,13 @@
       cursor: pointer; font-size: 12px; transition: all 0.2s;
     }
     .btn-primary { background: #a855f7; color: white; }
+    .btn-primary:hover { background: #9333ea; }
     .btn-danger { background: #dc3545; color: white; }
+    .btn-danger:hover { background: #bb2d3b; }
     .btn-success { background: #28a745; color: white; }
+    .btn-success:hover { background: #218838; }
+    .btn-warning { background: #f59e0b; color: #1a1008; }
+    .btn-warning:hover { background: #d97706; }
     .btn-sm { padding: 4px 10px; font-size: 11px; }
 
     .badge {
@@ -72,13 +77,27 @@
     .badge-active { background: rgba(40,167,69,0.2); color: #28a745; }
     .badge-disabled { background: rgba(220,53,69,0.2); color: #dc3545; }
     .badge-admin { background: rgba(168,85,247,0.2); color: #a855f7; }
+    .badge-day { background: rgba(59,130,246,0.2); color: #3b82f6; }
+    .badge-month { background: rgba(245,158,11,0.2); color: #f59e0b; }
+    .badge-year { background: rgba(34,197,94,0.2); color: #22c55e; }
+    .badge-expired { background: rgba(220,53,69,0.2); color: #dc3545; }
 
-    input[type="number"] {
+    input, select {
       background: #2d2d44; border: 1px solid #3d3d5c;
-      border-radius: 6px; padding: 6px 10px; color: #e0e0e0;
-      font-size: 13px; width: 80px; outline: none;
+      border-radius: 6px; padding: 8px 10px; color: #e0e0e0;
+      font-size: 13px; outline: none;
     }
-    input[type="number"]:focus { border-color: #a855f7; }
+    input:focus, select:focus { border-color: #a855f7; }
+    input[type="number"] { width: 70px; }
+
+    .form-row {
+      display: flex; gap: 10px; margin-bottom: 10px;
+      align-items: center; flex-wrap: wrap;
+    }
+    .form-row label { font-size: 13px; color: #999; min-width: 50px; }
+    .form-row input[type="email"],
+    .form-row input[type="password"],
+    .form-row input[type="text"] { flex: 1; min-width: 150px; }
 
     .login-overlay {
       position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -100,6 +119,11 @@
     .login-box .hint { font-size: 11px; color: #888; text-align: center; margin-top: 8px; }
 
     .hidden { display: none !important; }
+
+    .expired-text { color: #dc3545; font-weight: 600; }
+    .msg { font-size: 12px; margin-top: 4px; }
+    .msg-success { color: #28a745; }
+    .msg-error { color: #dc3545; }
   </style>
 </head>
 <body>
@@ -150,9 +174,39 @@
   <!-- 用户管理 -->
   <div id="page-users" class="hidden">
     <h2 style="margin-bottom:20px;">👥 用户管理</h2>
+
+    <!-- 创建用户 -->
+    <div class="card">
+      <h3>➕ 创建用户</h3>
+      <div class="form-row">
+        <label>邮箱</label>
+        <input type="email" id="newEmail" placeholder="user@example.com" />
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <input type="password" id="newPassword" placeholder="至少6位" />
+        <label>昵称</label>
+        <input type="text" id="newName" placeholder="可选" style="flex:0.6;min-width:100px" />
+      </div>
+      <div class="form-row">
+        <label>配额</label>
+        <input type="number" id="newQuota" value="100" min="1" />
+        <label>订阅</label>
+        <select id="newSubType">
+          <option value="">无限期</option>
+          <option value="day">日卡 (1天)</option>
+          <option value="month">月卡 (30天)</option>
+          <option value="year">年卡 (365天)</option>
+        </select>
+        <button class="btn btn-success" id="createUserBtn">创建用户</button>
+      </div>
+      <p id="createMsg" class="msg hidden"></p>
+    </div>
+
+    <!-- 用户列表 -->
     <div class="card">
       <h3>用户列表</h3>
-      <p style="font-size:12px;color:#888;margin-bottom:12px;">💡 新用户默认配额为 0，请手动分配下载配额。用户购买后，在配额列输入数量点保存即可。</p>
+      <p style="font-size:12px;color:#888;margin-bottom:12px;">💡 关闭公开注册，仅管理员可创建用户。修改配额后点 💾 保存。</p>
       <table>
         <thead>
           <tr>
@@ -161,6 +215,8 @@
             <th>配额</th>
             <th>已用</th>
             <th>剩余</th>
+            <th>订阅</th>
+            <th>到期时间</th>
             <th>状态</th>
             <th>注册时间</th>
             <th>操作</th>
@@ -225,6 +281,21 @@ async function loadDashboard() {
   }
 }
 
+// 订阅类型显示
+function subTypeBadge(subType, isExpired) {
+  if (!subType) return '<span style="color:#666">-</span>';
+  const names = { day: '日卡', month: '月卡', year: '年卡' };
+  const badgeClass = isExpired ? 'badge-expired' : `badge-${subType}`;
+  const label = isExpired ? `${names[subType] || subType} ⚠` : (names[subType] || subType);
+  return `<span class="badge ${badgeClass}">${label}</span>`;
+}
+
+function formatExpiry(expiresAt, isExpired) {
+  if (!expiresAt) return '<span style="color:#666">-</span>';
+  const d = expiresAt.split('T')[0];
+  return isExpired ? `<span class="expired-text">${d} (已到期)</span>` : d;
+}
+
 async function loadUsers() {
   const data = await apiFetch('/admin/users?per_page=100');
   const tbody = document.getElementById('userTableBody');
@@ -235,14 +306,17 @@ async function loadUsers() {
     tr.innerHTML = `
       <td>${u.id}</td>
       <td>${u.email}</td>
-      <td><input type="number" value="${u.quota_total}" id="qt-${u.id}" style="width:70px" /></td>
+      <td><input type="number" value="${u.quota_total}" id="qt-${u.id}" style="width:60px" /></td>
       <td>${u.quota_used}</td>
       <td style="color:#a855f7;font-weight:600">${u.quota_remaining}</td>
+      <td>${subTypeBadge(u.subscription_type, u.is_subscription_expired)}</td>
+      <td style="font-size:11px">${formatExpiry(u.subscription_expires_at, u.is_subscription_expired)}</td>
       <td><span class="badge ${u.is_active ? 'badge-active' : 'badge-disabled'}">${u.is_active ? '活跃' : '禁用'}</span>
           ${u.role === 'admin' ? '<span class="badge badge-admin">管理员</span>' : ''}</td>
       <td style="font-size:11px;color:#666">${u.created_at?.split('T')[0] || '-'}</td>
-      <td>
-        <button class="btn btn-primary btn-sm" onclick="updateQuota(${u.id})">💾</button>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="updateQuota(${u.id})" title="保存配额">💾</button>
+        <button class="btn btn-warning btn-sm" onclick="showSubModal(${u.id})" title="修改订阅">📅</button>
         <button class="btn ${u.is_active ? 'btn-danger' : 'btn-success'} btn-sm" onclick="toggleUser(${u.id})">${u.is_active ? '禁用' : '启用'}</button>
       </td>
     `;
@@ -259,9 +333,64 @@ async function updateQuota(userId) {
   loadUsers();
 }
 
+async function showSubModal(userId) {
+  const subType = prompt('输入订阅类型:\n- day (日卡/1天)\n- month (月卡/30天)\n- year (年卡/365天)\n- 留空 = 取消订阅/无限期', '');
+  if (subType === null) return; // 取消
+
+  const body = { subscription_type: subType.trim() };
+  await apiFetch(`/admin/users/${userId}/subscription`, {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  });
+  loadUsers();
+}
+
 async function toggleUser(userId) {
   await apiFetch(`/admin/users/${userId}/toggle`, { method: 'POST' });
   loadUsers();
+}
+
+// 创建用户
+document.getElementById('createUserBtn').addEventListener('click', async () => {
+  const email = document.getElementById('newEmail').value.trim();
+  const password = document.getElementById('newPassword').value.trim();
+  const name = document.getElementById('newName').value.trim();
+  const quota = parseInt(document.getElementById('newQuota').value) || 100;
+  const subType = document.getElementById('newSubType').value;
+  const msgEl = document.getElementById('createMsg');
+
+  if (!email || !email.includes('@')) { showMsg('请输入正确的邮箱', 'error'); return; }
+  if (!password || password.length < 6) { showMsg('密码至少6位', 'error'); return; }
+
+  try {
+    const body = { email, password, quota_total: quota, name };
+    if (subType) body.subscription_type = subType;
+
+    const data = await apiFetch('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+
+    if (data.id) {
+      showMsg(`✅ 用户创建成功！邮箱: ${data.email}`, 'success');
+      document.getElementById('newEmail').value = '';
+      document.getElementById('newPassword').value = '';
+      document.getElementById('newName').value = '';
+      loadUsers();
+    } else {
+      showMsg(data.error || '创建失败', 'error');
+    }
+  } catch (e) {
+    showMsg('创建失败: ' + e.message, 'error');
+  }
+});
+
+function showMsg(text, type) {
+  const el = document.getElementById('createMsg');
+  el.textContent = text;
+  el.className = `msg ${type === 'success' ? 'msg-success' : 'msg-error'}`;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 5000);
 }
 
 function showPage(page) {

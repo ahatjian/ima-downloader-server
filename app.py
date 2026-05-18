@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-IMA 下载助手 Pro - 服务端 (安全加固版)
-功能：用户认证（邮箱+验证码 / 手机号+短信）、配额管理、管理后台
+IMA 下载助手 Pro - 服务端 (密码登录版)
+功能：邮箱+密码登录、配额管理、订阅等级（日/月/年卡）、管理后台
+关闭公开注册 - 仅管理员可创建用户
 """
 
 import os
@@ -112,6 +113,9 @@ class User(db.Model):
     quota_total = db.Column(db.Integer, default=0)
     quota_used = db.Column(db.Integer, default=0)
     role = db.Column(db.String(20), default='user')
+    password_hash = db.Column(db.String(256), nullable=True)  # pbkdf2_hmac 密码哈希
+    subscription_type = db.Column(db.String(10), nullable=True)  # 'day' | 'month' | 'year' | None
+    subscription_expires_at = db.Column(db.DateTime, nullable=True)  # 订阅到期时间
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True)
@@ -119,6 +123,13 @@ class User(db.Model):
     @property
     def quota_remaining(self):
         return max(0, self.quota_total - self.quota_used)
+
+    @property
+    def is_subscription_expired(self):
+        """检查订阅是否已到期（无订阅类型返回 False）"""
+        if not self.subscription_type or not self.subscription_expires_at:
+            return False
+        return datetime.utcnow() > self.subscription_expires_at
 
     def to_dict(self):
         return {
@@ -131,6 +142,9 @@ class User(db.Model):
             'quota_remaining': self.quota_remaining,
             'role': self.role,
             'is_active': self.is_active,
+            'subscription_type': self.subscription_type,
+            'subscription_expires_at': self.subscription_expires_at.isoformat() if self.subscription_expires_at else None,
+            'is_subscription_expired': self.is_subscription_expired,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -188,6 +202,26 @@ def admin_required(f):
             return jsonify({'error': '需要管理员权限'}), 403
         return f(*args, **kwargs)
     return decorated
+
+
+def hash_password(password):
+    """使用 pbkdf2_hmac 哈希密码，返回格式: $pbkdf2-sha256$iterations$salt_hex$hash_hex"""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
+    return f'$pbkdf2-sha256$100000${salt.hex()}${dk.hex()}'
+
+
+def verify_password(password, password_hash):
+    """验证密码是否正确"""
+    if not password_hash or not password_hash.startswith('$pbkdf2-sha256$'):
+        return False
+    try:
+        _, algo, iterations, salt_hex, hash_hex = password_hash.split('$')
+        salt = bytes.fromhex(salt_hex)
+        dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, int(iterations))
+        return secrets.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
 
 
 def is_smtp_configured():
@@ -440,12 +474,12 @@ def dev_status():
 
 @app.route('/api/v1/auth/login', methods=['POST'])
 def login():
-    """邮箱+验证码登录"""
+    """邮箱+密码登录（关闭公开注册，仅管理员创建的用户可登录）"""
     email = request.json.get('email', '').strip().lower()
-    code = request.json.get('code', '').strip()
+    password = request.json.get('password', '').strip()
 
-    if not email or not code:
-        return jsonify({'error': '请输入邮箱和验证码'}), 400
+    if not email or not password:
+        return jsonify({'error': '请输入邮箱和密码'}), 400
 
     # 安全：检查登录锁定
     locked, lock_wait = login_tracker.is_locked(email)
@@ -458,43 +492,19 @@ def login():
     if limited:
         return jsonify({'error': f'请求太频繁，请{wait}秒后再试'}), 429
 
-    # 验证码校验
-    verify = VerifyCode.query.filter(
-        VerifyCode.email == email,
-        VerifyCode.code == code,
-        VerifyCode.used == False,
-        VerifyCode.expires_at > datetime.utcnow()
-    ).order_by(VerifyCode.id.desc()).first()
-
-    # 开发模式：通用验证码 888888（SMTP 未配置时生效）
-    dev_mode = not is_smtp_configured()
-    if not verify and dev_mode and code == '888888':
-        pass
-    elif not verify:
-        # 安全：记录失败尝试 + 递增验证码尝试计数
-        if verify:
-            verify.attempts += 1
-            db.session.commit()
-        login_tracker.record_attempt(email, False)
-        return jsonify({'error': '验证码错误或已过期'}), 401
-
-    # 安全：验证码最多尝试3次
-    if verify and verify.attempts >= 3:
-        verify.used = True
-        db.session.commit()
-        return jsonify({'error': '验证码已失效，请重新获取'}), 401
-
-    if verify:
-        verify.used = True
-
-    # 查找或创建用户
+    # 查找用户（不自动创建，仅管理员创建的用户可登录）
     user = User.query.filter_by(email=email).first()
     if not user:
-        email_prefix = email.split('@')[0]
-        user = User(email=email, name=f'用户{email_prefix[:8]}', quota_total=0)
-        db.session.add(user)
-    elif not user.is_active:
+        login_tracker.record_attempt(email, False)
+        return jsonify({'error': '账号不存在，请联系管理员开通'}), 401
+
+    if not user.is_active:
         return jsonify({'error': '账号已被禁用，请联系管理员'}), 403
+
+    # 验证密码
+    if not verify_password(password, user.password_hash):
+        login_tracker.record_attempt(email, False)
+        return jsonify({'error': '密码错误'}), 401
 
     user.last_login = datetime.utcnow()
     db.session.commit()
@@ -649,6 +659,12 @@ def consume_quota():
     if user.quota_remaining <= 0:
         return jsonify({'error': '配额不足，请联系管理员充值', 'message': '配额不足'}), 403
 
+    # 检查订阅是否到期
+    if user.is_subscription_expired:
+        sub_type_names = {'day': '日卡', 'month': '月卡', 'year': '年卡'}
+        sub_name = sub_type_names.get(user.subscription_type, user.subscription_type)
+        return jsonify({'error': f'您的{sub_name}已到期，请联系管理员续费', 'message': '订阅已到期'}), 403
+
     # 安全：限制单次消耗数量
     count = request.json.get('count', 1)
     count = max(1, min(count, 100))  # 单次最多消耗100
@@ -773,6 +789,80 @@ def admin_delete_user(user_id):
     return jsonify({'message': '用户已删除'})
 
 
+@app.route('/api/v1/admin/users', methods=['POST'])
+@admin_required
+def admin_create_user():
+    """管理员创建用户（关闭公开注册后唯一创建途径）"""
+    email = request.json.get('email', '').strip().lower()
+    password = request.json.get('password', '').strip()
+    quota_total = request.json.get('quota_total', 100)
+    subscription_type = request.json.get('subscription_type', '').strip()  # 'day' | 'month' | 'year' | ''
+    name = request.json.get('name', '').strip()
+
+    if not email or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        return jsonify({'error': '请输入正确的邮箱地址'}), 400
+    if not password or len(password) < 6:
+        return jsonify({'error': '密码至少6位'}), 400
+
+    # 检查邮箱是否已存在
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': '该邮箱已注册'}), 409
+
+    # 计算订阅到期时间
+    expires_at = None
+    if subscription_type in ('day', 'month', 'year'):
+        delta_map = {'day': timedelta(days=1), 'month': timedelta(days=30), 'year': timedelta(days=365)}
+        expires_at = datetime.utcnow() + delta_map[subscription_type]
+    elif subscription_type:
+        return jsonify({'error': '订阅类型无效，可选: day(日卡) / month(月卡) / year(年卡)'}), 400
+
+    user = User(
+        email=email,
+        name=name or email.split('@')[0][:8],
+        password_hash=hash_password(password),
+        quota_total=max(1, int(quota_total)),
+        subscription_type=subscription_type or None,
+        subscription_expires_at=expires_at
+    )
+    db.session.add(user)
+    db.session.commit()
+
+    return jsonify(user.to_dict()), 201
+
+
+@app.route('/api/v1/admin/users/<int:user_id>/subscription', methods=['PUT'])
+@admin_required
+def admin_update_subscription(user_id):
+    """修改用户订阅类型和到期时间"""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+
+    subscription_type = request.json.get('subscription_type', '').strip()
+    custom_expires_at = request.json.get('subscription_expires_at')  # ISO 格式，可选
+
+    if subscription_type in ('day', 'month', 'year'):
+        delta_map = {'day': timedelta(days=1), 'month': timedelta(days=30), 'year': timedelta(days=365)}
+        user.subscription_type = subscription_type
+        user.subscription_expires_at = datetime.utcnow() + delta_map[subscription_type]
+    elif subscription_type == '' or subscription_type is None:
+        user.subscription_type = None
+        user.subscription_expires_at = None
+    elif subscription_type:
+        return jsonify({'error': '订阅类型无效，可选: day(日卡) / month(月卡) / year(年卡)'}), 400
+
+    # 允许自定义到期时间（覆盖自动计算）
+    if custom_expires_at:
+        try:
+            from datetime import datetime as dt
+            user.subscription_expires_at = dt.fromisoformat(custom_expires_at)
+        except ValueError:
+            return jsonify({'error': '日期格式无效，请使用 ISO 格式如 2026-06-15T00:00:00'}), 400
+
+    db.session.commit()
+    return jsonify(user.to_dict())
+
+
 @app.route('/api/v1/admin/stats', methods=['GET'])
 @admin_required
 def admin_stats():
@@ -807,39 +897,56 @@ def admin_page():
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
 .sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:#1a1a2e;padding:20px 0;border-right:1px solid #2d2d44}
-.sidebar h2{font-size:16px;color:#f97316;padding:0 20px;margin-bottom:24px}
+.sidebar h2{font-size:16px;color:#7c3aed;padding:0 20px;margin-bottom:24px}
 .sidebar a{display:block;padding:12px 20px;color:#999;text-decoration:none;font-size:14px;transition:all 0.2s}
-.sidebar a:hover,.sidebar a.active{color:white;background:#2d2d44;border-left:3px solid #f97316}
+.sidebar a:hover,.sidebar a.active{color:white;background:#2d2d44;border-left:3px solid #7c3aed}
 .main{margin-left:220px;padding:24px}
 .stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
 .stat-card{background:#1a1a2e;border-radius:12px;padding:20px;text-align:center}
-.stat-card .num{font-size:32px;font-weight:700;color:#f97316}
+.stat-card .num{font-size:32px;font-weight:700;color:#7c3aed}
 .stat-card .label{font-size:12px;color:#888;margin-top:4px}
 .card{background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px}
-.card h3{font-size:16px;color:#f97316;margin-bottom:16px}
+.card h3{font-size:16px;color:#7c3aed;margin-bottom:16px}
 table{width:100%;border-collapse:collapse}
-th,td{padding:10px 12px;text-align:left;font-size:13px;border-bottom:1px solid #2d2d44}
+th,td{padding:6px 8px;text-align:left;font-size:11px;border-bottom:1px solid #2d2d44;white-space:nowrap}
 th{color:#888;font-weight:600}
 tr:hover td{background:#1e1e32}
-.btn{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:12px;transition:all 0.2s}
-.btn-primary{background:#f97316;color:white}
+.btn{padding:5px 10px;border-radius:6px;border:none;cursor:pointer;font-size:11px;transition:all 0.2s}
+.btn-primary{background:#7c3aed;color:white}
+.btn-primary:hover{background:#6d28d9}
 .btn-danger{background:#dc3545;color:white}
-.btn-success{background:#28a745;color:white}
-.btn-sm{padding:4px 10px;font-size:11px}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
-.badge-active{background:rgba(40,167,69,0.2);color:#28a745}
+.btn-danger:hover{background:#bb2d3b}
+.btn-success{background:#16a34a;color:white}
+.btn-success:hover{background:#15803d}
+.btn-warning{background:#f59e0b;color:#1a1008}
+.btn-warning:hover{background:#d97706}
+.btn-sm{padding:3px 8px;font-size:10px}
+.badge{display:inline-block;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:500}
+.badge-active{background:rgba(22,163,74,0.2);color:#16a34a}
 .badge-disabled{background:rgba(220,53,69,0.2);color:#dc3545}
-.badge-admin{background:rgba(249,115,22,0.2);color:#f97316}
-input[type="number"]{background:#2d2d44;border:1px solid #3d3d5c;border-radius:6px;padding:6px 10px;color:#e0e0e0;font-size:13px;width:80px;outline:none}
-input[type="number"]:focus{border-color:#f97316}
+.badge-admin{background:rgba(124,58,237,0.2);color:#7c3aed}
+.badge-day{background:rgba(59,130,246,0.2);color:#3b82f6}
+.badge-month{background:rgba(245,158,11,0.2);color:#f59e0b}
+.badge-year{background:rgba(22,163,74,0.2);color:#16a34a}
+.badge-expired{background:rgba(220,53,69,0.2);color:#dc3545}
+.expired-text{color:#dc3545;font-weight:600}
+input,select{background:#2d2d44;border:1px solid #3d3d5c;border-radius:6px;padding:6px 8px;color:#e0e0e0;font-size:12px;outline:none}
+input:focus,select:focus{border-color:#7c3aed}
+input[type="number"]{width:55px}
 .login-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,15,26,0.95);z-index:9999;display:flex;align-items:center;justify-content:center}
 .login-box{background:#1a1a2e;border-radius:16px;padding:32px;width:360px}
-.login-box h2{color:#f97316;margin-bottom:20px;text-align:center}
+.login-box h2{color:#7c3aed;margin-bottom:20px;text-align:center}
 .login-box input{width:100%;background:#2d2d44;border:1px solid #3d3d5c;border-radius:8px;padding:12px;color:#e0e0e0;font-size:14px;margin-bottom:12px;outline:none}
-.login-box input:focus{border-color:#f97316}
+.login-box input:focus{border-color:#7c3aed}
 .login-box .btn{width:100%;padding:12px;font-size:14px}
 .login-box .hint{font-size:11px;color:#888;text-align:center;margin-top:8px}
 .hidden{display:none!important}
+.msg{font-size:12px;margin-top:4px}
+.msg-success{color:#16a34a}
+.msg-error{color:#dc3545}
+.form-row{display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap}
+.form-row label{font-size:12px;color:#999;min-width:36px}
+.form-row input[type="email"],.form-row input[type="password"],.form-row input[type="text"]{flex:1;min-width:120px}
 </style>
 </head>
 <body>
@@ -870,9 +977,35 @@ input[type="number"]:focus{border-color:#f97316}
   <div id="page-users" class="hidden">
     <h2 style="margin-bottom:20px;">&#128101; 用户管理</h2>
     <div class="card">
+      <h3>➕ 创建用户</h3>
+      <p style="font-size:11px;color:#888;margin-bottom:10px;">&#128161; 关闭公开注册，仅管理员可创建用户。设置邮箱、密码、配额和订阅等级。</p>
+      <div class="form-row">
+        <label>邮箱</label>
+        <input type="email" id="newEmail" placeholder="user@example.com" />
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <input type="password" id="newPassword" placeholder="至少6位" />
+        <label>昵称</label>
+        <input type="text" id="newName" placeholder="可选" style="flex:0.5;min-width:80px" />
+      </div>
+      <div class="form-row">
+        <label>配额</label>
+        <input type="number" id="newQuota" value="100" min="1" />
+        <label>订阅</label>
+        <select id="newSubType">
+          <option value="">无限期</option>
+          <option value="day">日卡 (1天)</option>
+          <option value="month">月卡 (30天)</option>
+          <option value="year">年卡 (365天)</option>
+        </select>
+        <button class="btn btn-success" id="createUserBtn">创建用户</button>
+      </div>
+      <p id="createMsg" class="msg hidden"></p>
+    </div>
+    <div class="card">
       <h3>用户列表</h3>
-      <p style="font-size:12px;color:#888;margin-bottom:12px;">&#128161; 新用户默认配额为0，请手动分配下载配额。</p>
-      <table><thead><tr><th>ID</th><th>邮箱</th><th>手机号</th><th>配额</th><th>已用</th><th>剩余</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="userTableBody"></tbody></table>
+      <table><thead><tr><th>ID</th><th>邮箱</th><th>配额</th><th>已用</th><th>剩余</th><th>订阅</th><th>到期时间</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="userTableBody"></tbody></table>
     </div>
   </div>
 </div>
@@ -906,17 +1039,57 @@ async function loadDashboard(){
     document.getElementById("s-quotaUsed").textContent=data.total_quota_used;
   }
 }
+function subTypeBadge(ut,exp){
+  if(!ut)return'<span style="color:#666">-</span>';
+  var n={day:"日卡",month:"月卡",year:"年卡"};
+  var cls=exp?"badge-expired":"badge-"+ut;
+  var lb=exp?(n[ut]||ut)+" ⚠":(n[ut]||ut);
+  return'<span class="badge '+cls+'">'+lb+'</span>';
+}
+function fmtExpiry(ea,exp){
+  if(!ea)return'<span style="color:#666">-</span>';
+  var d=ea.split("T")[0];
+  return exp?'<span class="expired-text">'+d+' (已到期)</span>':d;
+}
 async function loadUsers(){
   const data=await apiFetch("/admin/users?per_page=100");
   const tbody=document.getElementById("userTableBody");tbody.innerHTML="";
   (data.users||[]).forEach(u=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML="<td>"+u.id+"</td><td>"+u.email+"</td><td>"+(u.phone||"-")+"</td><td><input type='number' value='"+u.quota_total+"' id='qt-"+u.id+"' style='width:70px' /></td><td>"+u.quota_used+"</td><td style='color:#f97316;font-weight:600'>"+u.quota_remaining+"</td><td><span class='badge "+(u.is_active?"badge-active":"badge-disabled")+"'>"+(u.is_active?"活跃":"禁用")+"</span>"+(u.role==="admin"?"<span class='badge badge-admin'>管理员</span>":"")+"</td><td style='font-size:11px;color:#666'>"+((u.created_at||"").split("T")[0]||"-")+"</td><td><button class='btn btn-primary btn-sm' onclick='updateQuota("+u.id+")'>💾</button> <button class='btn "+(u.is_active?"btn-danger":"btn-success")+" btn-sm' onclick='toggleUser("+u.id+")'>"+(u.is_active?"禁用":"启用")+"</button></td>";
+    var subHtml=subTypeBadge(u.subscription_type,u.is_subscription_expired);
+    var expHtml=fmtExpiry(u.subscription_expires_at,u.is_subscription_expired);
+    var activeBadge='<span class="badge '+(u.is_active?"badge-active":"badge-disabled")+'">'+(u.is_active?"活跃":"禁用")+'</span>';
+    var adminBadge=u.role==="admin"?'<span class="badge badge-admin">管理员</span>':'';
+    var createdDate=(u.created_at||"").split("T")[0]||"-";
+    var tr=document.createElement("tr");
+    tr.innerHTML='<td style="color:#666;font-size:10px">'+u.id+'</td><td>'+u.email+'</td><td><input type="number" value="'+u.quota_total+'" id="qt-'+u.id+'" /></td><td>'+u.quota_used+'</td><td style="color:#7c3aed;font-weight:600">'+u.quota_remaining+'</td><td>'+subHtml+'</td><td style="font-size:10px">'+expHtml+'</td><td>'+activeBadge+adminBadge+'</td><td style="font-size:10px;color:#666">'+createdDate+'</td><td style="white-space:nowrap"><button class="btn btn-primary btn-sm" onclick="updateQuota('+u.id+')">💾</button> <button class="btn btn-warning btn-sm" onclick="showSubModal('+u.id+')">📅</button> <button class="btn '+(u.is_active?"btn-danger":"btn-success")+' btn-sm" onclick="toggleUser('+u.id+')">'+(u.is_active?"禁用":"启用")+'</button></td>';
     tbody.appendChild(tr);
   });
 }
 async function updateQuota(userId){const qt=document.getElementById("qt-"+userId).value;await apiFetch("/admin/users/"+userId+"/quota",{method:"PUT",body:JSON.stringify({quota_total:parseInt(qt)})});loadUsers()}
+async function showSubModal(userId){
+  var st=prompt("输入订阅类型:\n- day (日卡/1天)\n- month (月卡/30天)\n- year (年卡/365天)\n- 留空 = 取消订阅","");
+  if(st===null)return;
+  await apiFetch("/admin/users/"+userId+"/subscription",{method:"PUT",body:JSON.stringify({subscription_type:st.trim()})});
+  loadUsers();
+}
 async function toggleUser(userId){await apiFetch("/admin/users/"+userId+"/toggle",{method:"POST"});loadUsers()}
+document.getElementById("createUserBtn").addEventListener("click",async()=>{
+  var email=document.getElementById("newEmail").value.trim();
+  var pass=document.getElementById("newPassword").value.trim();
+  var name=document.getElementById("newName").value.trim();
+  var quota=parseInt(document.getElementById("newQuota").value)||100;
+  var sub=document.getElementById("newSubType").value;
+  var m=document.getElementById("createMsg");
+  if(!email||email.indexOf("@")<0){m.textContent="请输入正确的邮箱";m.className="msg msg-error";m.classList.remove("hidden");return}
+  if(!pass||pass.length<6){m.textContent="密码至少6位";m.className="msg msg-error";m.classList.remove("hidden");return}
+  try{
+    var body={email:email,password:pass,quota_total:quota,name:name};
+    if(sub)body.subscription_type=sub;
+    var data=await apiFetch("/admin/users",{method:"POST",body:JSON.stringify(body)});
+    if(data.id){m.textContent="✅ 用户创建成功！邮箱: "+data.email;m.className="msg msg-success";m.classList.remove("hidden");document.getElementById("newEmail").value="";document.getElementById("newPassword").value="";document.getElementById("newName").value="";loadUsers();setTimeout(function(){m.classList.add("hidden")},5000)}
+    else{m.textContent=data.error||"创建失败";m.className="msg msg-error";m.classList.remove("hidden")}
+  }catch(e){m.textContent="创建失败: "+e.message;m.className="msg msg-error";m.classList.remove("hidden")}
+});
 function showPage(page){document.querySelectorAll("[id^='page-']").forEach(el=>el.classList.add("hidden"));document.getElementById("page-"+page).classList.remove("hidden");document.querySelectorAll(".sidebar a").forEach(a=>a.classList.remove("active"));event.target.classList.add("active")}
 </script>
 </body>
@@ -970,6 +1143,33 @@ with app.app_context():
     except Exception as e:
         db.session.rollback()
         print('[MIGRATE] 迁移: ' + str(e))
+
+    # 安全添加 password_hash、subscription_type、subscription_expires_at 列到 user 表
+    try:
+        _db_url = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        if 'postgresql' in _db_url:
+            for col_stmt in [
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS password_hash VARCHAR(256)',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS subscription_type VARCHAR(10)',
+                'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP',
+            ]:
+                db.session.execute(db.text(col_stmt))
+            print('[MIGRATE] PostgreSQL: 新字段已添加（或已存在）')
+        else:
+            for col_stmt in [
+                'ALTER TABLE "user" ADD COLUMN password_hash VARCHAR(256)',
+                'ALTER TABLE "user" ADD COLUMN subscription_type VARCHAR(10)',
+                'ALTER TABLE "user" ADD COLUMN subscription_expires_at TIMESTAMP',
+            ]:
+                try:
+                    db.session.execute(db.text(col_stmt))
+                    print(f'[MIGRATE] SQLite: {col_stmt}')
+                except Exception:
+                    print(f'[MIGRATE] SQLite: 列已存在，跳过')
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print('[MIGRATE] 新字段迁移: ' + str(e))
 
     init_admin()
 
